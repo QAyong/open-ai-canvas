@@ -62,7 +62,7 @@ import { CanvasVersionCompareModal } from "@/components/canvas/canvas-version-co
 import { CanvasLocalAgentPanel } from "@/components/canvas/canvas-local-agent-panel";
 import { useFocusMode } from "@/hooks/use-focus-mode";
 import { useCanvasAgentStore } from "@/stores/canvas/use-canvas-agent-store";
-import { getContextResourceNodes, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { getContextResourceNodes, removeCanvasResourceMention, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasConnectionCreateMenu, CanvasNodePanelOverlay } from "@/components/canvas/canvas-workspace-overlays";
 import { CanvasLeaferGraphicsLayer } from "@/components/canvas/canvas-leafer-graphics-layer";
 import { CanvasFreeformEmptyState, CanvasLinkedProjectEmptyState, CanvasShortDramaEmptyState, CanvasShortDramaGuide, CanvasStoryInputNodeContent, CanvasStylePlaceholderNodeContent } from "@/components/canvas/canvas-short-drama-entry";
@@ -994,6 +994,29 @@ function InfiniteCanvasPage() {
         setHoveredNodeId,
     });
 
+    const handleRemoveNodeReference = useCallback((targetNodeId: string, reference: CanvasResourceReference) => {
+        const referenceNodeId = reference.nodeId;
+        if (!referenceNodeId) return;
+        // 生成节点可能通过配置节点接收参考，只移除参考来源边，保留目标到配置节点的主链。
+        const configNodeId = connectionsRef.current.find((connection) => {
+            if (connection.fromNodeId !== targetNodeId) return false;
+            return nodesRef.current.find((node) => node.id === connection.toNodeId)?.type === CanvasNodeType.Config;
+        })?.toNodeId;
+        const removedConnectionIds = new Set(
+            connectionsRef.current
+                .filter((connection) => connection.fromNodeId === referenceNodeId && (connection.toNodeId === targetNodeId || connection.toNodeId === configNodeId))
+                .map((connection) => connection.id),
+        );
+        const targetNode = nodesRef.current.find((node) => node.id === targetNodeId);
+        const currentPrompt = targetNode?.metadata?.composerContent ?? targetNode?.metadata?.prompt ?? "";
+        const nextPrompt = removeCanvasResourceMention(currentPrompt, reference);
+        if (nextPrompt !== currentPrompt) handleNodePromptChange(targetNodeId, nextPrompt);
+        if (!removedConnectionIds.size) return;
+        connectionsRef.current = connectionsRef.current.filter((connection) => !removedConnectionIds.has(connection.id));
+        setConnections(connectionsRef.current);
+        setSelectedConnectionId((current) => current && removedConnectionIds.has(current) ? null : current);
+    }, [connectionsRef, handleNodePromptChange, nodesRef, setConnections, setSelectedConnectionId]);
+
     const handleProjectFolderInsert = useCallback((folderId: string) => {
         const folder = linkedProjectQuery.data?.assetFolders.find((item) => item.id === folderId);
         if (!folder || !linkedProjectId) throw new Error("素材文件夹已不存在，请刷新后重试");
@@ -1535,6 +1558,7 @@ function InfiniteCanvasPage() {
                     onPromptChange={handleNodePromptChange}
                     onConfigChange={handleConfigNodeChange}
                     onGenerate={handleGenerateNode}
+                    onRemoveReference={handleRemoveNodeReference}
                     workspaceMode={workspaceMode}
                     onImageSettingsOpenChange={(open) => {
                         setNodeImageSettingsOpen(open);
@@ -1543,7 +1567,7 @@ function InfiniteCanvasPage() {
                 />
             );
         },
-        [configInputsById, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, mentionReferencesByNodeId, runningNodeId, skillMentionReferences, workspaceMode],
+        [configInputsById, handleConfigNodeChange, handleGenerateNode, handleNodePromptChange, handleRemoveNodeReference, mentionReferencesByNodeId, runningNodeId, skillMentionReferences, workspaceMode],
     );
 
     const renderCanvasNodeContent = useCallback(

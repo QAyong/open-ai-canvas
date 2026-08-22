@@ -6868,12 +6868,13 @@
     }
 
     .canvas-node-reference-chip {
+        position: relative;
         display: inline-flex;
         min-width: 0;
         height: 30px;
         flex: 0 0 auto;
         align-items: center;
-        overflow: hidden;
+        overflow: visible;
         border-radius: var(--r-md);
         background: var(--canvas-composer-control-surface);
     }
@@ -6906,6 +6907,28 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
+    }
+
+    .canvas-node-reference-remove {
+        position: absolute;
+        z-index: 1;
+        top: -4px;
+        right: -4px;
+        display: grid;
+        width: 16px;
+        height: 16px;
+        place-items: center;
+        border: var(--stroke-1) solid;
+        border-radius: var(--r-full);
+        padding: 0;
+        opacity: 0;
+        box-shadow: var(--shadow-sm);
+        transition: opacity var(--motion-dur-fast) var(--motion-ease-out), background-color var(--motion-dur-fast) var(--motion-ease-out), color var(--motion-dur-fast) var(--motion-ease-out);
+    }
+
+    .canvas-node-reference-chip:hover .canvas-node-reference-remove,
+    .canvas-node-reference-remove:focus-visible {
+        opacity: 1;
     }
 
     .canvas-node-composer-parameters {

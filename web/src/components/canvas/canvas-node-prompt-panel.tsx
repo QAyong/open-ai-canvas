@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
-import { ArrowUp, AtSign, Boxes, ChevronDown, FileText, ImageIcon, ImagePlus, Maximize2, Music2, Pencil, SlidersHorizontal, UserRound, Video } from "lucide-react";
+import { ArrowUp, AtSign, Boxes, ChevronDown, FileText, ImageIcon, ImagePlus, Maximize2, Music2, Pencil, SlidersHorizontal, UserRound, Video, X } from "lucide-react";
 import { Button, Image as AntImage, InputNumber, Modal, Tooltip } from "antd";
 
 import { ModelPicker } from "@/components/model-picker";
@@ -31,6 +31,7 @@ type CanvasNodePromptPanelProps = {
     onConfigChange: (nodeId: string, patch: Partial<CanvasNodeMetadata>) => void;
     onGenerate: (nodeId: string, mode: CanvasNodeGenerationMode, prompt: string) => void;
     mentionReferences?: CanvasResourceReference[];
+    onRemoveReference?: (nodeId: string, reference: CanvasResourceReference) => void;
     onImageSettingsOpenChange?: (open: boolean) => void;
     workspaceMode?: CanvasWorkspaceMode;
 };
@@ -46,7 +47,7 @@ const PROMPT_EDITOR_VERTICAL_PADDING = 12;
 const PROMPT_EDITOR_EXPANDED_VERTICAL_PADDING = 20;
 const PROMPT_EDITOR_MAX_LINES = 8;
 
-export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], onImageSettingsOpenChange, workspaceMode = "professional" }: CanvasNodePromptPanelProps) {
+export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfigChange, onGenerate, mentionReferences = [], onRemoveReference, onImageSettingsOpenChange, workspaceMode = "professional" }: CanvasNodePromptPanelProps) {
     const globalConfig = useEffectiveConfig();
     const themeName = useThemeStore((state) => state.theme);
     const theme = canvasThemes[themeName];
@@ -318,7 +319,7 @@ export function CanvasNodePromptPanel({ node, isRunning, onPromptChange, onConfi
         return (
             <>
                 <div className="canvas-node-composer-editor" style={{ height }}>
-                    <ConnectedReferenceShelf references={mentionReferences} theme={theme} onInsert={insertPromptReference} />
+                    <ConnectedReferenceShelf references={mentionReferences} theme={theme} onInsert={insertPromptReference} onRemove={(reference) => onRemoveReference?.(node.id, reference)} />
                     <CanvasResourceMentionTextarea
                         value={prompt}
                         references={mentionReferences}
@@ -436,7 +437,7 @@ function modeDisplayName(mode: CanvasNodeGenerationMode) {
     return "文本";
 }
 
-function ConnectedReferenceShelf({ references, theme, onInsert }: { references: CanvasResourceReference[]; theme: CanvasTheme; onInsert: (reference: CanvasResourceReference) => void }) {
+function ConnectedReferenceShelf({ references, theme, onInsert, onRemove }: { references: CanvasResourceReference[]; theme: CanvasTheme; onInsert: (reference: CanvasResourceReference) => void; onRemove?: (reference: CanvasResourceReference) => void }) {
     const activeReferences = references.filter((item) => item.active && item.kind !== "skill");
     const [imagePreview, setImagePreview] = useState<CanvasResourceReference | null>(null);
     if (!activeReferences.length) return null;
@@ -462,6 +463,22 @@ function ConnectedReferenceShelf({ references, theme, onInsert }: { references: 
                                 <AtSign className="size-2.5" />
                                 <span>{reference.label}</span>
                             </button>
+                            {onRemove ? (
+                                <button
+                                    type="button"
+                                    className="canvas-node-reference-remove"
+                                    style={{ background: theme.toolbar.panel, borderColor: theme.node.stroke, color: theme.node.text }}
+                                    title="移除参考并删除连接"
+                                    aria-label={`移除参考 ${reference.label}`}
+                                    onClick={(event) => {
+                                        event.stopPropagation();
+                                        onRemove(reference);
+                                    }}
+                                    onPointerDown={(event) => event.stopPropagation()}
+                                >
+                                    <X className="size-3" />
+                                </button>
+                            ) : null}
                         </span>
                     );
                 })}
