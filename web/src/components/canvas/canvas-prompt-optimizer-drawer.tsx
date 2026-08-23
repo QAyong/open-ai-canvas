@@ -85,11 +85,7 @@ function getInitialPanelPosition(panelSize: PanelSize): PanelPosition {
     if (!anchor) return { left: PANEL_MARGIN, top: PANEL_MARGIN };
 
     const { rect } = anchor;
-    const left = clampPanelValue(
-        rect.left + (rect.width - panelSize.width) / 2,
-        PANEL_MARGIN,
-        window.innerWidth - PANEL_MARGIN - panelSize.width,
-    );
+    const left = clampPanelValue(rect.left + (rect.width - panelSize.width) / 2, PANEL_MARGIN, window.innerWidth - PANEL_MARGIN - panelSize.width);
     const aboveTop = rect.top - panelSize.height - PANEL_MARGIN;
     const belowTop = rect.bottom + PANEL_MARGIN;
     const hasRoomBelow = belowTop + panelSize.height <= window.innerHeight - PANEL_MARGIN;
@@ -125,10 +121,7 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
     panelOffsetRef.current = panelOffset;
 
     const activeReferences = useMemo(() => references.filter((reference) => reference.active), [references]);
-    const selectedReferences = useMemo(
-        () => activeReferences.filter((reference) => selectedReferenceIds.includes(reference.id)),
-        [activeReferences, selectedReferenceIds],
-    );
+    const selectedReferences = useMemo(() => activeReferences.filter((reference) => selectedReferenceIds.includes(reference.id)), [activeReferences, selectedReferenceIds]);
     const optimizationReferences = mode === "reference" ? selectedReferences : activeReferences;
     const referenceCount = mode === "reference" ? selectedReferences.length : activeReferences.length;
     const textContext = useMemo(
@@ -136,9 +129,10 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
         [optimizationReferences],
     );
     const imageContext = useMemo(
-        () => optimizationReferences
-            .filter((reference) => (reference.kind === "image" || reference.kind === "character") && reference.previewUrl && /^(data:|https?:\/\/)/i.test(reference.previewUrl))
-            .map((reference) => ({ title: reference.title || reference.label, url: reference.previewUrl! })),
+        () =>
+            optimizationReferences
+                .filter((reference) => (reference.kind === "image" || reference.kind === "character") && reference.previewUrl && /^(data:|https?:\/\/)/i.test(reference.previewUrl))
+                .map((reference) => ({ title: reference.title || reference.label, url: reference.previewUrl! })),
         [optimizationReferences],
     );
 
@@ -168,10 +162,13 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
         wasOpenRef.current = open;
     }, [open, panelSize]);
 
-    useEffect(() => () => {
-        abortRef.current?.abort();
-        interactionCleanupRef.current?.();
-    }, []);
+    useEffect(
+        () => () => {
+            abortRef.current?.abort();
+            interactionCleanupRef.current?.();
+        },
+        [],
+    );
 
     useEffect(() => {
         if (open) return;
@@ -350,16 +347,8 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
             }
 
             const nextPosition = {
-                left: clampPanelValue(
-                    edges.left ? startPosition.left + startSize.width - nextWidth : startPosition.left,
-                    PANEL_MARGIN,
-                    window.innerWidth - PANEL_MARGIN - nextWidth,
-                ),
-                top: clampPanelValue(
-                    edges.top ? startPosition.top + startSize.height - nextHeight : startPosition.top,
-                    PANEL_MARGIN,
-                    window.innerHeight - PANEL_MARGIN - nextHeight,
-                ),
+                left: clampPanelValue(edges.left ? startPosition.left + startSize.width - nextWidth : startPosition.left, PANEL_MARGIN, window.innerWidth - PANEL_MARGIN - nextWidth),
+                top: clampPanelValue(edges.top ? startPosition.top + startSize.height - nextHeight : startPosition.top, PANEL_MARGIN, window.innerHeight - PANEL_MARGIN - nextHeight),
             };
             schedulePanelLayout(nextPosition, { width: nextWidth, height: nextHeight });
         };
@@ -494,19 +483,24 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
             role: "ai",
             content: (
                 <div className="canvas-prompt-optimizer-bubble is-assistant-bubble">
-                    <div className="canvas-prompt-optimizer-message-meta"><span>提示词助手</span><span>当前模式：{modeOptions.find((option) => option.value === mode)?.label}</span></div>
+                    <div className="canvas-prompt-optimizer-message-meta">
+                        <span>提示词助手</span>
+                        <span>当前模式：{modeOptions.find((option) => option.value === mode)?.label}</span>
+                    </div>
                     <p>{modeDescriptions[mode]}</p>
                     {mode === "reference" ? (
                         <ReferenceSelection
                             references={activeReferences}
                             selectedReferences={selectedReferences}
-                            onToggle={(referenceId) => setSelectedReferenceIds((current) => current.includes(referenceId) ? current.filter((id) => id !== referenceId) : [...current, referenceId])}
+                            onToggle={(referenceId) => setSelectedReferenceIds((current) => (current.includes(referenceId) ? current.filter((id) => id !== referenceId) : [...current, referenceId]))}
                         />
                     ) : activeReferences.length ? (
                         <div className="canvas-prompt-optimizer-chat-reference">
                             <span>将结合参考</span>
                             <div className="flex min-w-0 flex-wrap gap-1.5">
-                                {activeReferences.map((reference) => <Tag key={reference.id}>{reference.title || reference.label}</Tag>)}
+                                {activeReferences.map((reference) => (
+                                    <Tag key={reference.id}>{reference.title || reference.label}</Tag>
+                                ))}
                             </div>
                         </div>
                     ) : null}
@@ -521,7 +515,10 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
             role: "user",
             content: (
                 <div className="canvas-prompt-optimizer-user-content">
-                    <div className="canvas-prompt-optimizer-message-meta"><span>你</span><span>{submittedPrompt.length} 字</span></div>
+                    <div className="canvas-prompt-optimizer-message-meta">
+                        <span>你</span>
+                        <span>{submittedPrompt.length} 字</span>
+                    </div>
                     <div className="canvas-prompt-optimizer-bubble is-user-bubble">{submittedPrompt}</div>
                 </div>
             ),
@@ -557,11 +554,17 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
                 <div className="canvas-prompt-optimizer-bubble is-assistant-bubble is-result-bubble">
                     <div className="canvas-prompt-optimizer-message-meta">
                         <span>提示词助手</span>
-                        {result.modelProfile ? <Tag color="blue" bordered={false}>已按 {result.modelProfile.label} 适配</Tag> : null}
+                        {result.modelProfile ? (
+                            <Tag color="blue" bordered={false}>
+                                已按 {result.modelProfile.label} 适配
+                            </Tag>
+                        ) : null}
                     </div>
                     <div className="canvas-prompt-optimizer-result-heading">
                         <span>我建议这样写</span>
-                        <Button type="primary" size="small" icon={<Check className="size-3.5" />} onClick={applyPrompt} disabled={!selectedPrompt.trim()} aria-label="采用优化后的提示词">采用</Button>
+                        <Button type="primary" size="small" icon={<Check className="size-3.5" />} onClick={applyPrompt} disabled={!selectedPrompt.trim()} aria-label="采用优化后的提示词">
+                            采用
+                        </Button>
                     </div>
                     <Input.TextArea
                         className="canvas-prompt-optimizer-textarea canvas-prompt-optimizer-result-textarea"
@@ -582,7 +585,9 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
 
                     {result.variants.length ? (
                         <div className="canvas-prompt-optimizer-subsection">
-                            <div className="canvas-prompt-optimizer-field-label"><span>备选版本</span></div>
+                            <div className="canvas-prompt-optimizer-field-label">
+                                <span>备选版本</span>
+                            </div>
                             <div className="space-y-2">
                                 {result.variants.map((variant) => {
                                     const selected = selectedPrompt === variant.prompt;
@@ -605,7 +610,6 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
                             </div>
                         </div>
                     ) : null}
-
                 </div>
             ),
         });
@@ -626,24 +630,20 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
                     beginPanelInteraction(event, "drag");
                 }}
             >
-                <div
-                    className="canvas-prompt-optimizer-header-main canvas-prompt-optimizer-drag-region"
-                    role="button"
-                    tabIndex={0}
-                    aria-label="移动提示词优化面板"
-                    title="拖动移动面板，方向键也可以移动"
-                    onKeyDown={handlePanelMoveKeyDown}
-                >
-                    <span className="canvas-prompt-optimizer-icon"><Sparkles className="size-4" aria-hidden="true" /></span>
+                <div className="canvas-prompt-optimizer-header-main canvas-prompt-optimizer-drag-region" role="button" tabIndex={0} aria-label="移动提示词优化面板" title="拖动移动面板，方向键也可以移动" onKeyDown={handlePanelMoveKeyDown}>
+                    <span className="canvas-prompt-optimizer-icon">
+                        <Sparkles className="size-4" aria-hidden="true" />
+                    </span>
                     <div className="canvas-prompt-optimizer-header-title">
                         <div className="canvas-prompt-optimizer-header-title-row">
                             <Typography.Text strong>AI 提示词优化</Typography.Text>
                             <span className="canvas-prompt-optimizer-mode-badge">{generationMode === "image" ? "图片" : "视频"}</span>
                             <span className="canvas-prompt-optimizer-context" title={targetModel || "未配置模型"}>
-                                · {targetModel || "未配置模型"}{referenceCount ? ` · 参考 ${referenceCount}` : ""}
+                                · {targetModel || "未配置模型"}
+                                {referenceCount ? ` · 参考 ${referenceCount}` : ""}
                             </span>
-                </div>
-            </div>
+                        </div>
+                    </div>
                 </div>
                 <button type="button" className="canvas-prompt-optimizer-close" onPointerDown={(event) => event.stopPropagation()} onClick={onClose} aria-label="关闭提示词优化">
                     <X className="size-4" aria-hidden="true" />
@@ -660,7 +660,11 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
                         ai: {
                             placement: "start",
                             variant: "borderless",
-                            avatar: <span className="canvas-prompt-optimizer-message-avatar"><Sparkles className="size-3.5" aria-hidden="true" /></span>,
+                            avatar: (
+                                <span className="canvas-prompt-optimizer-message-avatar">
+                                    <Sparkles className="size-3.5" aria-hidden="true" />
+                                </span>
+                            ),
                         },
                         user: { placement: "end", variant: "borderless" },
                         system: { placement: "start", variant: "borderless" },
@@ -717,11 +721,7 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
                                     disabled={!provider || working || !draftPrompt.trim() || (mode === "reference" && !selectedReferences.length)}
                                     aria-label={working ? "正在优化" : "发送优化请求"}
                                 >
-                                    {working ? (
-                                        <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" />
-                                    ) : (
-                                        <ArrowUp className="size-4" strokeWidth={2.35} aria-hidden="true" />
-                                    )}
+                                    {working ? <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" /> : <ArrowUp className="size-4" strokeWidth={2.35} aria-hidden="true" />}
                                 </button>
                             </div>
                         </div>
@@ -743,7 +743,9 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
     return (
         <Popover
             open={open}
-            onOpenChange={(nextOpen) => { if (!nextOpen) onClose(); }}
+            onOpenChange={(nextOpen) => {
+                if (!nextOpen) onClose();
+            }}
             trigger={[]}
             placement="top"
             arrow={false}
@@ -761,9 +763,15 @@ export function CanvasPromptOptimizerDrawer({ open, children, prompt, generation
 function ResultList({ title, items, warning = false }: { title: string; items: string[]; warning?: boolean }) {
     return (
         <div className="canvas-prompt-optimizer-subsection">
-            <div className="canvas-prompt-optimizer-field-label"><span>{title}</span></div>
+            <div className="canvas-prompt-optimizer-field-label">
+                <span>{title}</span>
+            </div>
             <ul className={`canvas-prompt-optimizer-list ${warning ? "is-warning" : ""}`}>
-                {items.map((item) => <li key={item} className="list-disc pl-1 marker:text-foreground/35">{item}</li>)}
+                {items.map((item) => (
+                    <li key={item} className="list-disc pl-1 marker:text-foreground/35">
+                        {item}
+                    </li>
+                ))}
             </ul>
         </div>
     );
@@ -808,5 +816,9 @@ function ReferencePreview({ reference }: { reference: CanvasResourceReference })
         return <img className="canvas-prompt-optimizer-reference-chip-preview" src={reference.previewUrl} alt="" />;
     }
     const Icon = reference.kind === "text" ? FileText : reference.kind === "video" ? Video : reference.kind === "audio" ? Music2 : reference.kind === "character" ? UserRound : ImageIcon;
-    return <span className="canvas-prompt-optimizer-reference-chip-icon"><Icon className="size-3.5" aria-hidden="true" /></span>;
+    return (
+        <span className="canvas-prompt-optimizer-reference-chip-icon">
+            <Icon className="size-3.5" aria-hidden="true" />
+        </span>
+    );
 }

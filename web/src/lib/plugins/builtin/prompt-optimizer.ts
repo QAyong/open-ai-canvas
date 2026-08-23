@@ -118,7 +118,7 @@ function resolveModelAdaptationProfile(input: PromptOptimizationInput): ModelAda
                 avoid: ["不要使用 SD 权重、反向提示词标签或未确认的供应商参数。"],
             };
         }
-        if (containsAny(model, ["gpt-image", "dall-e", "dalle", "openai-image", "openai" ])) {
+        if (containsAny(model, ["gpt-image", "dall-e", "dalle", "openai-image", "openai"])) {
             return {
                 id: "openai-image",
                 label: "OpenAI 图片模型",
@@ -268,7 +268,10 @@ function buildUserMessage(input: PromptOptimizationInput, modelProfile: ModelAda
 }
 
 function parseJsonObject(value: string) {
-    const cleaned = value.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "");
+    const cleaned = value
+        .trim()
+        .replace(/^```(?:json)?\s*/i, "")
+        .replace(/\s*```$/, "");
     const candidates = [cleaned];
     const start = cleaned.indexOf("{");
     const end = cleaned.lastIndexOf("}");
@@ -285,18 +288,25 @@ function parseJsonObject(value: string) {
 }
 
 function stringArray(value: unknown) {
-    return Array.isArray(value) ? value.filter((item): item is string => typeof item === "string").map((item) => item.trim()).filter(Boolean) : [];
+    return Array.isArray(value)
+        ? value
+              .filter((item): item is string => typeof item === "string")
+              .map((item) => item.trim())
+              .filter(Boolean)
+        : [];
 }
 
 function variants(value: unknown): PromptOptimizationVariant[] {
     if (!Array.isArray(value)) return [];
-    return value.flatMap((item): PromptOptimizationVariant[] => {
-        if (!item || typeof item !== "object") return [];
-        const record = item as Record<string, unknown>;
-        const label = typeof record.label === "string" ? record.label.trim() : "备选版本";
-        const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
-        return prompt ? [{ label: label || "备选版本", prompt }] : [];
-    }).slice(0, 2);
+    return value
+        .flatMap((item): PromptOptimizationVariant[] => {
+            if (!item || typeof item !== "object") return [];
+            const record = item as Record<string, unknown>;
+            const label = typeof record.label === "string" ? record.label.trim() : "备选版本";
+            const prompt = typeof record.prompt === "string" ? record.prompt.trim() : "";
+            return prompt ? [{ label: label || "备选版本", prompt }] : [];
+        })
+        .slice(0, 2);
 }
 
 function normalizeResult(value: Record<string, unknown> | null, sourcePrompt: string, modelProfile?: ModelAdaptationProfile | null): PromptOptimizationResult {

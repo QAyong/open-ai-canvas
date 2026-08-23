@@ -10,7 +10,7 @@ const CanvasOverlayLayerContext = createContext<CanvasOverlayLayerContextValue |
 export function CanvasOverlayLayerProvider({ children }: { children: ReactNode }) {
     const [activeOverlayId, setActiveOverlayId] = useState<string | null>(null);
     const bringToFront = useCallback((overlayId: string) => {
-        setActiveOverlayId((current) => current === overlayId ? current : overlayId);
+        setActiveOverlayId((current) => (current === overlayId ? current : overlayId));
     }, []);
     const value = useMemo(() => ({ activeOverlayId, bringToFront }), [activeOverlayId, bringToFront]);
 
@@ -26,7 +26,23 @@ export function useCanvasOverlayLayer(overlayId: string, fallbackZIndex: string)
     return { bringToFront, zIndex };
 }
 
-export function CanvasOverlayLayerContainer({ overlayId, fallbackZIndex, className, children, onMouseDown, onPointerDown, onWheel }: { overlayId: string; fallbackZIndex: string; className?: string; children: ReactNode; onMouseDown?: MouseEventHandler<HTMLDivElement>; onPointerDown?: PointerEventHandler<HTMLDivElement>; onWheel?: WheelEventHandler<HTMLDivElement> }) {
+export function CanvasOverlayLayerContainer({
+    overlayId,
+    fallbackZIndex,
+    className,
+    children,
+    onMouseDown,
+    onPointerDown,
+    onWheel,
+}: {
+    overlayId: string;
+    fallbackZIndex: string;
+    className?: string;
+    children: ReactNode;
+    onMouseDown?: MouseEventHandler<HTMLDivElement>;
+    onPointerDown?: PointerEventHandler<HTMLDivElement>;
+    onWheel?: WheelEventHandler<HTMLDivElement>;
+}) {
     const { bringToFront, zIndex } = useCanvasOverlayLayer(overlayId, fallbackZIndex);
 
     return (
