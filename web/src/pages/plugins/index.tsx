@@ -6,6 +6,7 @@ import { useNavigate } from "react-router";
 import { listRegisteredPlugins } from "@/lib/plugins/plugin-registry";
 import "@/lib/plugins/builtin";
 import { EAGLE_PLUGIN_ID } from "@/lib/plugins/builtin/eagle";
+import { PROMPT_OPTIMIZER_PLUGIN_ID } from "@/lib/plugins/builtin/prompt-optimizer";
 import { getEagleLibrary, type EagleFolder } from "@/services/api/eagle";
 import { usePluginStore } from "@/stores/use-plugin-store";
 
@@ -35,6 +36,7 @@ const permissionLabels: Record<string, string> = {
     "asset.import": "导入素材",
     "asset.upload": "上传素材",
     "generation.run": "调用生成",
+    "ai.text": "调用文本模型",
     "external.open": "打开外部详情",
 };
 
@@ -282,6 +284,11 @@ export default function PluginsPage() {
                                             <Button icon={<ExternalLink className="size-4" />} href="https://api.eagle.cool/" target="_blank">查看 API</Button>
                                         </div>
                                     </>
+                                ) : settingsPlugin.manifest.id === PROMPT_OPTIMIZER_PLUGIN_ID ? (
+                                    <div className="rounded-[var(--r-md)] border border-border/60 bg-muted/25 px-3 py-3 text-[var(--fs-body)] leading-6 text-foreground/70">
+                                        <p>在创作页或图片、视频节点的提示词编辑器中使用“优化”按钮，即可让当前文本模型整理提示词。</p>
+                                        <p className="mt-2 text-[var(--fs-micro)] text-foreground/50">插件不会自动覆盖原提示词，只有点击“采用”后才会回填到当前输入框。</p>
+                                    </div>
                                 ) : (
                                     <div className="plugin-settings-empty">该插件暂无可编辑设置项。当前接入位置和权限会根据插件清单自动生效。</div>
                                 )}

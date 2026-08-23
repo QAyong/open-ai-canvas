@@ -51,9 +51,13 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 		if logicalModelID != "" {
 			return nil, ModelCatalogMismatch("模型目录已更新，请重新选择")
 		}
-		// 必须校验 channelId + model 属于启用的系统渠道模型
-		if err := s.validateSystemChannelModelSelection(normalizedInput); err != nil {
-			return nil, err
+		// 自定义渠道没有系统 channelId；它会在后续由自定义渠道功能开关、
+		// 能力校验和 provider 配置校验共同处理，不能误报为“缺少系统渠道”。
+		if !taskInputUsesCustomChannel(normalizedInput) {
+			// 非自定义任务必须校验 channelId + model 属于启用的系统渠道模型。
+			if err := s.validateSystemChannelModelSelection(normalizedInput); err != nil {
+				return nil, err
+			}
 		}
 	}
 
