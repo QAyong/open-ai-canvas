@@ -3,6 +3,7 @@ import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode, 
 import { ChevronRight, Clapperboard, Image as ImageIcon, List, Music2, Pencil, Video, WandSparkles, X } from "lucide-react";
 
 import { SpotlightSurface } from "@/components/ui/aceternity/spotlight-surface";
+import { useCanvasOverlayLayer } from "@/components/canvas/canvas-overlay-layer";
 import { canvasThemes } from "@/lib/canvas-theme";
 import { aceternityMotion } from "@/lib/aceternity-motion";
 import { subscribeCanvasViewportPreview } from "@/lib/canvas/canvas-live-viewport";
@@ -95,8 +96,13 @@ const NODE_PANEL_PLACEMENT_BUFFER = 32;
 export function CanvasNodePanelOverlay({ node, viewport, containerRef, panelWidth, panelHeight = 190, dragOffset, isDragging = false, children }: { node: CanvasNodeData; viewport: ViewportTransform; containerRef: RefObject<HTMLDivElement | null>; panelWidth?: number; panelHeight?: number; dragOffset?: Position | null; isDragging?: boolean; children: ReactNode }) {
     const panelRef = useRef<HTMLDivElement>(null);
     const placementRef = useRef<NodePanelPlacement | null>(null);
+    const { bringToFront, zIndex } = useCanvasOverlayLayer(`node-panel:${node.id}`, "var(--z-modal-overlay)");
     const initialWidth = resolveNodePanelWidth(node, viewport, panelWidth);
     const initialPosition = getNodePanelPosition(node, viewport, { width: containerRef.current?.clientWidth || 0, height: containerRef.current?.clientHeight || 0 }, initialWidth, panelHeight, dragOffset);
+
+    useLayoutEffect(() => {
+        bringToFront();
+    }, [bringToFront]);
 
     useLayoutEffect(() => {
         const container = containerRef.current;
@@ -142,9 +148,11 @@ export function CanvasNodePanelOverlay({ node, viewport, containerRef, panelWidt
         <div
             ref={panelRef}
             data-canvas-no-zoom
-            className="thin-scrollbar absolute z-[var(--z-modal-overlay)] max-w-[calc(100%_-_24px)] overflow-y-auto"
-            style={{ left: initialPosition.left, top: initialPosition.top, width: initialWidth, maxHeight: "calc(100% - 84px)" }}
+            className="thin-scrollbar absolute max-w-[calc(100%_-_24px)] overflow-y-auto"
+            style={{ left: initialPosition.left, top: initialPosition.top, width: initialWidth, maxHeight: "calc(100% - 84px)", zIndex }}
             onMouseDown={(event) => event.stopPropagation()}
+            onPointerDownCapture={bringToFront}
+            onFocusCapture={bringToFront}
             onPointerDown={(event) => event.stopPropagation()}
         >
             {children}
@@ -161,10 +169,15 @@ export function CanvasConnectionCreateMenu({ pending, viewport, viewportSize, co
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const reducedMotion = useReducedMotion();
     const menuRef = useRef<HTMLDivElement>(null);
+    const { bringToFront, zIndex } = useCanvasOverlayLayer("connection-create-menu", "var(--z-modal-overlay)");
     const menuWidth = 248;
     const menuHeight = canCreateDrawing ? 420 : 376;
     const gap = 12;
     const initialPosition = getConnectionMenuPosition(pending.position, viewport, viewportSize, menuWidth, menuHeight, gap);
+
+    useLayoutEffect(() => {
+        bringToFront();
+    }, [bringToFront]);
 
     useLayoutEffect(() => {
         const container = containerRef.current;
@@ -187,11 +200,13 @@ export function CanvasConnectionCreateMenu({ pending, viewport, viewportSize, co
             initial={reducedMotion ? { opacity: 0 } : { opacity: 0, y: 6, scale: 0.97, rotateX: 2 }}
             animate={{ opacity: 1, y: 0, scale: 1, rotateX: 0 }}
             transition={{ duration: aceternityMotion.duration.instant, ease: aceternityMotion.easing.enter }}
-            className="aceternity-floating-panel absolute z-[var(--z-modal-overlay)] w-[248px] origin-top-left overflow-hidden rounded-[var(--r-2xl)] border p-2 backdrop-blur-2xl"
+            className="aceternity-floating-panel absolute w-[248px] origin-top-left overflow-hidden rounded-[var(--r-2xl)] border p-2 backdrop-blur-2xl"
             data-canvas-no-zoom
             data-connection-create-menu
-            style={{ left: initialPosition.left, top: initialPosition.top, background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.node.text }}
+            style={{ left: initialPosition.left, top: initialPosition.top, zIndex, background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.node.text }}
             onMouseDown={(event) => event.stopPropagation()}
+            onPointerDownCapture={bringToFront}
+            onFocusCapture={bringToFront}
             onPointerDown={(event) => event.stopPropagation()}
         >
             <div className="absolute inset-x-8 top-0 h-px" style={{ background: `linear-gradient(90deg, transparent, ${theme.toolbar.border}, transparent)` }} />

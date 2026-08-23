@@ -198,6 +198,7 @@
     --z-panel-floating: 80;     /* L7 浮动面板（助手/agent/活动任务）*/
     --z-modal: 100;             /* L8 对话框 */
     --z-modal-overlay: 110;     /* L9 遮罩 */
+    --z-canvas-overlay-active: 150; /* 画布浮层：最后交互的面板 */
     --z-popover: 200;           /* L10 弹出层 */
     --z-toast: 500;             /* L11 通知 */
     --z-tooltip: 1000;          /* L12 提示 */

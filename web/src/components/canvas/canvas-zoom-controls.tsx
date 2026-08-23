@@ -12,7 +12,7 @@ import { useThemeStore } from "@/stores/use-theme-store";
 type CanvasZoomControlsProps = {
     scale: number;
     onScaleChange: (scale: number) => void;
-    onReset: () => void;
+    onFitContent: () => void;
     isMiniMapOpen: boolean;
     onToggleMiniMap: () => void;
     onOpenShortcuts: () => void;
@@ -21,7 +21,7 @@ type CanvasZoomControlsProps = {
 
 const QUICK_ZOOM_LEVELS = [0.25, 0.5, 1, 2] as const;
 
-export function CanvasZoomControls({ scale, onScaleChange, onReset, isMiniMapOpen, onToggleMiniMap, onOpenShortcuts, containerRef }: CanvasZoomControlsProps) {
+export function CanvasZoomControls({ scale, onScaleChange, onFitContent, isMiniMapOpen, onToggleMiniMap, onOpenShortcuts, containerRef }: CanvasZoomControlsProps) {
     const theme = canvasThemes[useThemeStore((state) => state.theme)];
     const rootRef = useRef<HTMLDivElement>(null);
     const liveScaleRef = useRef(scale);
@@ -70,7 +70,7 @@ export function CanvasZoomControls({ scale, onScaleChange, onReset, isMiniMapOpe
 
     const items: FloatingDockEntry[] = [
         { id: "zoom-minimap", label: isMiniMapOpen ? "关闭小地图" : "打开小地图", icon: <Compass />, active: isMiniMapOpen, onClick: onToggleMiniMap },
-        { id: "zoom-fit", label: "适应全部内容", icon: <Focus />, onClick: onReset },
+        { id: "zoom-fit", label: "适应画布", icon: <Focus />, onClick: onFitContent },
         { kind: "separator", id: "zoom-separator" },
         { id: "zoom-out", label: "缩小画布", icon: <Minus />, onClick: () => commitScale(liveScaleRef.current - 0.1) },
         {

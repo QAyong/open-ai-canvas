@@ -66,6 +66,7 @@ import { useFocusMode } from "@/hooks/use-focus-mode";
 import { useCanvasAgentStore } from "@/stores/canvas/use-canvas-agent-store";
 import { getContextResourceNodes, removeCanvasResourceMention, type CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
 import { CanvasConnectionCreateMenu, CanvasNodePanelOverlay } from "@/components/canvas/canvas-workspace-overlays";
+import { CanvasOverlayLayerContainer, CanvasOverlayLayerProvider } from "@/components/canvas/canvas-overlay-layer";
 import { CanvasLeaferGraphicsLayer } from "@/components/canvas/canvas-leafer-graphics-layer";
 import { CanvasFreeformEmptyState, CanvasLinkedProjectEmptyState, CanvasShortDramaEmptyState, CanvasShortDramaGuide, CanvasStoryInputNodeContent, CanvasStylePlaceholderNodeContent } from "@/components/canvas/canvas-short-drama-entry";
 import { failedImageBatchChildren, markImageBatchRetrying, reconcileImageBatchRoot, restoreUnsubmittedImageBatchChild } from "@/lib/canvas/canvas-image-batch-retry";
@@ -500,7 +501,6 @@ function InfiniteCanvasPage() {
         handleViewportChange,
         handleViewportPreviewChange,
         previewViewport,
-        resetViewport,
         screenToCanvas,
         setZoomScale,
         zoomCanvasIn,
@@ -898,7 +898,6 @@ function InfiniteCanvasPage() {
 
     const handleCanvasSelectionStart = useCallback(() => {
         setContextMenu(null);
-        setDialogNodeId(null);
     }, []);
 
     const handleNodeInteractionStart = useCallback((selectionModifier: boolean) => {
@@ -925,7 +924,6 @@ function InfiniteCanvasPage() {
         setContextMenu(null);
         setHoveredNodeId(null);
         setToolbarNodeId(null);
-        setDialogNodeId(null);
     }, []);
 
     const { alignmentGuides, cancelSelectionBox, deselectCanvas, dragPreview, frameDropTargetId, handleCanvasMouseDown, handleNodeMouseDown, isNodeDragging, nodeDraggingRef, selectionBoundsElementRef, selectionBox } = useCanvasSelectionController({
@@ -1599,6 +1597,7 @@ function InfiniteCanvasPage() {
                     onGenerate={handleGenerateNode}
                     onRemoveReference={handleRemoveNodeReference}
                     onClose={() => setDialogNodeId(null)}
+                    onNodeMouseDown={handleNodeMouseDown}
                     workspaceMode={workspaceMode}
                     onImageSettingsOpenChange={(open) => {
                         setNodeImageSettingsOpen(open);
@@ -1817,7 +1816,8 @@ function InfiniteCanvasPage() {
                 {!focusMode && shortDramaEnabled && currentProject?.projectId ? (
                     <CanvasProjectSidebar projectId={currentProject.projectId} detail={linkedProjectQuery.data} onAddChapter={handleProjectChapterInsert} onLocateStyle={locateProjectStyleNode} onOpenAssets={() => openProjectAssets()} />
                 ) : null}
-                <section className="relative min-w-0 flex-1 flex flex-col min-h-0 overflow-hidden">
+                <CanvasOverlayLayerProvider>
+                    <section className="relative min-w-0 flex-1 flex flex-col min-h-0 overflow-hidden">
                     {!focusMode ? (
                         <CanvasTopBar
                             title={currentProject?.title || "未命名画布"}
@@ -2024,7 +2024,7 @@ function InfiniteCanvasPage() {
                                     onExit={exitFocusMode}
                                     onZoomIn={zoomCanvasIn}
                                     onZoomOut={zoomCanvasOut}
-                                    onFit={resetViewport}
+                                    onFit={fitCanvasContent}
                                 />
                             ) : null}
 
@@ -2240,9 +2240,10 @@ function InfiniteCanvasPage() {
                     {isMiniMapOpen && !focusMode ? <Minimap nodes={nodes} viewport={viewport} viewportSize={size} canvasContainerRef={containerRef} onViewportPreviewChange={previewViewport} onViewportChange={handleViewportChange} /> : null}
 
                     {!focusMode ? (
-                        <div
-                            data-canvas-no-zoom
-                            className="absolute bottom-[calc(var(--canvas-inset-y)+var(--space-16))] left-[var(--canvas-inset-x)] z-[var(--z-panel)] flex items-end gap-2 lg:bottom-[var(--canvas-inset-y)]"
+                        <CanvasOverlayLayerContainer
+                            overlayId="asset-tray"
+                            fallbackZIndex="var(--z-panel)"
+                            className="absolute bottom-[calc(var(--canvas-inset-y)+var(--space-16))] left-[var(--canvas-inset-x)] flex items-end gap-2 lg:bottom-[var(--canvas-inset-y)]"
                             onMouseDown={(event) => event.stopPropagation()}
                             onPointerDown={(event) => event.stopPropagation()}
                             onWheel={(event) => event.stopPropagation()}
@@ -2251,7 +2252,7 @@ function InfiniteCanvasPage() {
                                 scale={viewport.k}
                                 containerRef={containerRef}
                                 onScaleChange={setZoomScale}
-                                onReset={resetViewport}
+                                onFitContent={fitCanvasContent}
                                 isMiniMapOpen={isMiniMapOpen}
                                 onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)}
                                 onOpenShortcuts={() => setShortcutRequestNonce((value) => value + 1)}
@@ -2264,7 +2265,7 @@ function InfiniteCanvasPage() {
                                 onInsertAssetImage={(asset) => void createImageAssetNode(asset)}
                                 onFocusCanvasImage={focusCanvasImageNode}
                             />
-                        </div>
+                        </CanvasOverlayLayerContainer>
                     ) : null}
 
                     <CanvasProjectContextMenu
@@ -2516,7 +2517,8 @@ function InfiniteCanvasPage() {
                     {codexCompactAgent && !assistantMounted ? (
                         <CanvasLocalAgentPanel headless snapshot={agentSnapshot} canUndoOps={canUndoAgentOps} undoOpsCount={agentUndoCount} onApplyOps={applyAgentOps} onUndoOps={undoAgentOps} autoConnect={codexAutoConnect} />
                     ) : null}
-                </section>
+                    </section>
+                </CanvasOverlayLayerProvider>
             </main>
         </>
     );
