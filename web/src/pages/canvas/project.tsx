@@ -825,6 +825,7 @@ function InfiniteCanvasPage() {
 
     const {
         alignSelectedNodes,
+        autoArrangeCanvasNodes,
         arrangeSelectedNodes,
         copyNodesToClipboard,
         copySelectedNodes,
@@ -2253,6 +2254,7 @@ function InfiniteCanvasPage() {
                                 containerRef={containerRef}
                                 onScaleChange={setZoomScale}
                                 onFitContent={fitCanvasContent}
+                                onAutoArrange={autoArrangeCanvasNodes}
                                 isMiniMapOpen={isMiniMapOpen}
                                 onToggleMiniMap={() => setIsMiniMapOpen((value) => !value)}
                                 onOpenShortcuts={() => setShortcutRequestNonce((value) => value + 1)}
