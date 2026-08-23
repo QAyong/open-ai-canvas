@@ -7239,6 +7239,15 @@
         }
     }
 
+    @keyframes canvas-node-panel-placement-blur {
+        from { opacity: .78; filter: blur(4px); }
+        to { opacity: 1; filter: blur(0); }
+    }
+
+    .canvas-node-panel-placement-change {
+        animation: canvas-node-panel-placement-blur 180ms var(--motion-ease-out) both;
+    }
+
     @keyframes canvas-connection-flow {
         to {
             stroke-dashoffset: -44;
@@ -7341,6 +7350,7 @@
 @media (prefers-reduced-motion: reduce) {
     .workspace-state { animation: none; }
     :where(.ant-btn:not(:disabled)):active { transform: none; }
+    .canvas-node-panel-placement-change { animation: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -19,6 +19,10 @@
 
 当前版本以仓库根目录 [`VERSION`](VERSION) 为准。
 
+## 仓库协作
+
+本项目的远端上游仓库是 [`ddcat-ai/open-ai-canvas`](https://github.com/ddcat-ai/open-ai-canvas)。本地同步主线代码时，应以该仓库的 `main` 分支为准。
+
 ## 赞助商
 
 感谢以下赞助商对影策项目的支持：
