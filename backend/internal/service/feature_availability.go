@@ -14,11 +14,11 @@ import (
 const featureAvailabilitySettingKey = "feature_availability"
 
 const (
-	FeatureShortDrama        = "shortDrama"
-	FeatureTaskCenter        = "taskCenter"
-	FeatureCredits           = "credits"
-	FeatureCustomChannels    = "customChannels"
-	FeatureFrontendModels    = "frontendModels"
+	FeatureShortDrama     = "shortDrama"
+	FeatureTaskCenter     = "taskCenter"
+	FeatureCredits        = "credits"
+	FeatureCustomChannels = "customChannels"
+	FeatureFrontendModels = "frontendModels"
 )
 
 type FeatureAvailability struct {
