@@ -266,6 +266,9 @@ export type CanvasNodeMetadata = {
     taskProgress?: number;
     taskStage?: string;
     taskProvider?: string;
+    taskStartedAt?: string;
+    taskCompletedAt?: string;
+    taskDurationMs?: number;
     taskErrorCode?: string;
     taskOfficialStatus?: "pending" | "processing" | "completed" | "failed" | "cancelled";
     taskReceiptRecorded?: boolean;
@@ -283,6 +286,7 @@ export type CanvasNodeMetadata = {
     };
     sessionId?: string;
     videoEditOperation?: CanvasVideoEditOperation;
+    arkPrivateAssetUpload?: string;
     videoCameraMoveId?: string;
     videoCameraMovePrompt?: string;
     videoStartFrameNodeId?: string;

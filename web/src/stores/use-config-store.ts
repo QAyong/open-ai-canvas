@@ -81,6 +81,7 @@ export type AiConfig = {
     vquality: string;
     videoGenerateAudio: string;
     videoWatermark: string;
+    videoArkPrivateAssetUpload: string;
     systemPrompt: string;
     models: string[];
     imageModels: string[];
@@ -121,6 +122,7 @@ export const defaultConfig: AiConfig = {
     vquality: "720",
     videoGenerateAudio: "true",
     videoWatermark: "false",
+    videoArkPrivateAssetUpload: "true",
     systemPrompt: "",
     models: [],
     imageModels: [],
@@ -338,6 +340,7 @@ export function normalizeConfigSnapshot(snapshot: ConfigStoreSnapshot | undefine
             vquality: normalizeVideoResolution(config.vquality),
             videoGenerateAudio: config.videoGenerateAudio || "true",
             videoWatermark: config.videoWatermark || "false",
+            videoArkPrivateAssetUpload: config.videoArkPrivateAssetUpload || "true",
             transparentBackground: config.transparentBackground === "true" ? "true" : "false",
             canvasImageCount: config.canvasImageCount || defaultConfig.canvasImageCount,
             imageModels,
@@ -475,7 +478,20 @@ export function modelOptionsFromChannels(channels: ModelChannel[]) {
 
 export function hasSystemModelPrice(channel: ModelChannel, model: string) {
     if (channel.scope !== "system") return true;
-    return channel.modelCosts?.some((item) => item.model === model && Number.isFinite(item.unitPriceMicrocredits) && item.unitPriceMicrocredits >= 0) === true;
+    const positive = (value: number | undefined) => typeof value === "number" && Number.isFinite(value) && value > 0;
+    return channel.modelCosts?.some((item) => {
+        if (item.model !== model) return false;
+        const tiers = item.logicalPriceTiers || [];
+        if (tiers.length) {
+            return tiers.some((tier) => tier.billingMode === "token"
+                ? [tier.inputTokenPriceMicrocredits, tier.outputTokenPriceMicrocredits, tier.cachedTokenPriceMicrocredits].some(positive)
+                : positive(tier.unitPriceMicrocredits));
+        }
+        if (item.billingMode === "token") {
+            return [item.inputTokenPriceMicrocredits, item.outputTokenPriceMicrocredits, item.cachedTokenPriceMicrocredits].some(positive);
+        }
+        return positive(item.unitPriceMicrocredits);
+    }) === true;
 }
 
 export function normalizeModelOptionValue(value: unknown, channels: ModelChannel[]) {
