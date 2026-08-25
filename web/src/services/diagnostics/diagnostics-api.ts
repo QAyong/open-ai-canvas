@@ -51,11 +51,9 @@ export async function exportDiagnosticBundle(input: DiagnosticExportInput): Prom
             const status = error.response.status;
             const raw = await readErrorBody(error.response.data);
             try {
-                const payload = raw ? JSON.parse(raw) as { code?: number; msg?: string } : null;
+                const payload = raw ? (JSON.parse(raw) as { code?: number; msg?: string }) : null;
                 if (payload) {
-                    const message = status === 404
-                        ? "诊断接口未部署，请重启或重新构建后端"
-                        : payload.msg || "导出诊断包失败";
+                    const message = status === 404 ? "诊断接口未部署，请重启或重新构建后端" : payload.msg || "导出诊断包失败";
                     throw new ApiError(message, { status, code: payload.code, cause: error });
                 }
             } catch (parseError) {

@@ -90,7 +90,7 @@ export function initializeClientDiagnostics() {
             const config = error.config;
             const meta = config ? requestMeta.get(config) : undefined;
             const response = error.response;
-            const body = response?.data && typeof response.data === "object" ? response.data as { code?: number; msg?: string } : undefined;
+            const body = response?.data && typeof response.data === "object" ? (response.data as { code?: number; msg?: string }) : undefined;
             const route = normalizeRoute(config?.url);
             recordDiagnosticEvent({
                 level: "error",
@@ -141,10 +141,12 @@ export function recordDiagnosticEvent(input: DiagnosticEventInput) {
 export function getClientDiagnosticEvents(range?: { from?: Date; to?: Date }) {
     const from = range?.from?.getTime() ?? Number.NEGATIVE_INFINITY;
     const to = range?.to?.getTime() ?? Number.POSITIVE_INFINITY;
-    return events.filter((event) => {
-        const timestamp = Date.parse(event.timestamp);
-        return Number.isFinite(timestamp) && timestamp >= from && timestamp <= to;
-    }).map((event) => ({ ...event }));
+    return events
+        .filter((event) => {
+            const timestamp = Date.parse(event.timestamp);
+            return Number.isFinite(timestamp) && timestamp >= from && timestamp <= to;
+        })
+        .map((event) => ({ ...event }));
 }
 
 export function getDiagnosticRuntime() {

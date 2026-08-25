@@ -129,15 +129,7 @@ export default function DiagnosticsPanel({ taskId, projectId }: DiagnosticsPanel
                         </div>
                         <label className="mt-4 block" htmlFor="diagnostic-description">
                             <span className="sr-only">遇到了什么问题？</span>
-                            <Input.TextArea
-                                id="diagnostic-description"
-                                rows={4}
-                                maxLength={1000}
-                                showCount
-                                value={description}
-                                onChange={(event) => setDescription(event.target.value)}
-                                placeholder="例如：点击生成后一直显示处理中，刷新页面也没有结果。"
-                            />
+                            <Input.TextArea id="diagnostic-description" rows={4} maxLength={1000} showCount value={description} onChange={(event) => setDescription(event.target.value)} placeholder="例如：点击生成后一直显示处理中，刷新页面也没有结果。" />
                         </label>
                     </section>
                 </div>
@@ -186,9 +178,13 @@ function buildInput(range: DiagnosticRange, description: string | undefined, tas
 
 function rangeMilliseconds(range: DiagnosticRange) {
     switch (range) {
-        case "15m": return 15 * 60 * 1000;
-        case "1h": return 60 * 60 * 1000;
-        case "24h": return 24 * 60 * 60 * 1000;
-        default: return 30 * 60 * 1000;
+        case "15m":
+            return 15 * 60 * 1000;
+        case "1h":
+            return 60 * 60 * 1000;
+        case "24h":
+            return 24 * 60 * 60 * 1000;
+        default:
+            return 30 * 60 * 1000;
     }
 }
