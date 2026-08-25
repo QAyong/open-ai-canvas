@@ -1,5 +1,6 @@
 import { CanvasNodeType } from "@/types/canvas";
 import type { CanvasNodeMetadata } from "@/types/canvas";
+import { createDefaultPortraitClearanceState } from "@/lib/portrait-clearance/contracts";
 
 type CanvasNodeSpec = {
     width: number;
@@ -25,6 +26,7 @@ export const NODE_DEFAULT_SIZE = {
     [CanvasNodeType.Compare]: { width: 520, height: 320, title: "对比" },
     [CanvasNodeType.Chart]: { width: 480, height: 320, title: "图表" },
     [CanvasNodeType.ColorGrade]: { width: 420, height: 360, title: "调色" },
+    [CanvasNodeType.PortraitClearance]: { width: 560, height: 420, title: "肖像可识别性排查" },
 } satisfies Record<CanvasNodeType, { width: number; height: number; title: string }>;
 
 export const NODE_SPECS = {
@@ -99,6 +101,10 @@ export const NODE_SPECS = {
     [CanvasNodeType.ColorGrade]: {
         ...NODE_DEFAULT_SIZE[CanvasNodeType.ColorGrade],
         metadata: { status: "idle" },
+    },
+    [CanvasNodeType.PortraitClearance]: {
+        ...NODE_DEFAULT_SIZE[CanvasNodeType.PortraitClearance],
+        metadata: { portraitClearance: createDefaultPortraitClearanceState() },
     },
 } satisfies Record<CanvasNodeType, CanvasNodeSpec>;
 

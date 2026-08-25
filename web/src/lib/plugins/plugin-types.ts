@@ -25,7 +25,9 @@ export type PluginPermission =
     | "asset.upload"
     | "generation.run"
     | "ai.text"
-    | "external.open";
+    | "external.open"
+    | "external.network"
+    | "external.upload";
 
 export type PluginManifest = {
     id: string;

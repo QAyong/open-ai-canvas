@@ -1,5 +1,6 @@
 import { ChartColumn, Clapperboard, Code, Columns2, FileText, Globe, Image as ImageIcon, Music2, PanelTop, Palette, Pencil, Settings2, Shapes, Sparkles, Type, Video } from "lucide-react";
 
+import { PortraitClearanceIcon } from "@/components/canvas/portrait-clearance/portrait-clearance-icon";
 import { NODE_SPECS } from "@/constant/canvas";
 import { MEDIA_NODE_MIN_SIZE } from "@/lib/canvas/canvas-node-size";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
@@ -164,6 +165,15 @@ const BUILTIN_NODE_TRAITS = {
         // 会让它永远不被当成素材、从而进不了生成输入。没有上游时由
         // readReferenceImage 返回 null 跳过，不需要在这里提前判空。
         resourceKind: () => "image",
+        inputKind: "image",
+    },
+    [CanvasNodeType.PortraitClearance]: {
+        label: "肖像排查",
+        icon: <PortraitClearanceIcon />,
+        minSize: { width: 420, height: 300 },
+        showInCreateMenu: true,
+        // 排查节点消费图片，但不作为素材或生成输入输出；结果通过节点状态和工作台查看。
+        showOutputConnection: false,
         inputKind: "image",
     },
 } satisfies Record<CanvasNodeType, Omit<CanvasNodeDefinition, "type" | "defaultTitle" | "defaultSize" | "defaultMetadata">>;

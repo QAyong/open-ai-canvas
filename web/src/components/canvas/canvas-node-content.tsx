@@ -26,8 +26,9 @@ import { ColorGradeNodeContent } from "./nodes/color-grade-node";
 import { HtmlNodeContent } from "./nodes/html-node";
 import { PanoramaNodeContent } from "./nodes/panorama-node";
 import { SvgNodeContent } from "./nodes/svg-node";
+import { PortraitClearanceNodeContent } from "./nodes/portrait-clearance-node";
 
-type CanvasNodeContentProps = {
+export type CanvasNodeContentProps = {
     node: CanvasNodeData;
     theme: CanvasTheme;
     isEditingContent: boolean;
@@ -57,11 +58,12 @@ export function CanvasNodeContent(props: CanvasNodeContentProps) {
         || (props.node.metadata?.workflowKind === "story_input" && !props.isEditingContent)
         || (props.node.metadata?.workflowKind === "styleboard" && !props.node.metadata.content);
     if (hasCustomContent && props.renderNodeContent) return props.renderNodeContent(props.node);
+    const Renderer = nodeContentRenderers[props.node.type];
+    if (props.node.type === CanvasNodeType.PortraitClearance) return <Renderer {...props} />;
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;
     if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} onOpenTaskDetails={props.onOpenTaskDetails} />;
     if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onReloadResource={props.onReloadResource} />;
 
-    const Renderer = nodeContentRenderers[props.node.type];
     return Renderer ? <Renderer {...props} /> : <UnknownNodeContent theme={props.theme} />;
 }
 
@@ -82,6 +84,7 @@ const nodeContentRenderers = {
     [CanvasNodeType.Compare]: CompareNodeContent,
     [CanvasNodeType.Chart]: ChartNodeContent,
     [CanvasNodeType.ColorGrade]: ColorGradeNodeContent,
+    [CanvasNodeType.PortraitClearance]: (props: CanvasNodeContentProps) => <PortraitClearanceNodeContent node={props.node} />,
 } satisfies Record<CanvasNodeType, (props: CanvasNodeContentProps) => ReactNode>;
 
 function DrawingContent({ node, theme, drawingProjectId }: CanvasNodeContentProps) {

@@ -130,7 +130,7 @@ export function useCanvasNodeOperations({
         const node = createCanvasNode(type, position || getCanvasCenter(), type === CanvasNodeType.Drawing ? { drawingEngine: defaultDrawingEngine } : undefined);
         commitNodes([...nodesRef.current, node]);
         selectNodes(new Set([node.id]));
-        if (type !== CanvasNodeType.Text && type !== CanvasNodeType.Script && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Frame && type !== CanvasNodeType.Drawing) setDialogNodeId(node.id);
+        if (type !== CanvasNodeType.Text && type !== CanvasNodeType.Script && type !== CanvasNodeType.Audio && type !== CanvasNodeType.Frame && type !== CanvasNodeType.Drawing && type !== CanvasNodeType.PortraitClearance) setDialogNodeId(node.id);
     }, [commitNodes, defaultDrawingEngine, getCanvasCenter, message, nodesRef, selectNodes, setDialogNodeId, tldrawLicenseKey]);
 
     const createFolder = useCallback((position?: Position, linked?: { id: string; projectId: string; title: string; style: CanvasFolderStyle; theme: CanvasFolderTheme; createdAt: string }) => {
@@ -371,7 +371,7 @@ export function useCanvasNodeOperations({
             const sourceNode = sourceByTargetId.get(targetNode.id);
             if (sourceNode) cloneDrawingForNode(sourceNode, targetNode, "绘图副本保存失败，请重新复制");
         });
-        if (!isFrameNode(source) && source.type !== CanvasNodeType.Drawing) setDialogNodeId(id);
+        if (!isFrameNode(source) && source.type !== CanvasNodeType.Drawing && source.type !== CanvasNodeType.PortraitClearance) setDialogNodeId(id);
     }, [cloneDrawingForNode, commitConnections, commitNodes, connectionsRef, nodesRef, selectNodes, setDialogNodeId]);
 
     const setPrimaryVersion = useCallback((nodeId: string) => {
@@ -482,7 +482,7 @@ export function useCanvasNodeOperations({
         selectNodes(topLevelIds);
         setContextMenu(null);
         const primaryNode = nextNodes.find((node) => !node.parentId);
-        setDialogNodeId(primaryNode && !isFrameNode(primaryNode) && primaryNode.type !== CanvasNodeType.Drawing ? primaryNode.id : null);
+        setDialogNodeId(primaryNode && !isFrameNode(primaryNode) && primaryNode.type !== CanvasNodeType.Drawing && primaryNode.type !== CanvasNodeType.PortraitClearance ? primaryNode.id : null);
         return true;
     }, [cloneDrawingForNode, commitConnections, commitNodes, connectionsRef, getCanvasCenter, nodesRef, selectNodes, setContextMenu, setDialogNodeId]);
 
