@@ -42,6 +42,39 @@ description: 影策当前已实现的核心工作台能力与使用入口
 - `web/src/services/plugin-host.ts`：将插件文本请求接入宿主现有模型渠道。
 - `web/src/pages/create/index.tsx`、`web/src/components/canvas/canvas-node-prompt-panel.tsx`：两个入口的接入。
 
+## 用户诊断包导出
+
+设置页的“问题诊断”入口和任务失败快捷入口支持导出脱敏诊断包，帮助普通用户提交问题时保留足够的排障上下文。
+
+### 当前能力
+
+- 浏览器内存中保留最近的全局错误、未处理 Promise、API 请求和任务创建事件。
+- 后端按当前登录用户、时间范围、任务或项目聚合 `Task`、`TaskLog` 和 `ApiCallLog`。
+- 下载前显示数据量预览，并生成包含清单、运行时信息和 JSONL 日志的 ZIP。
+- 默认排除提示词、任务输入、API Key、Cookie、上游请求/响应体和 URL 查询参数。
+
+### 使用入口
+
+- 设置页：`/settings?section=diagnostics`。
+- 失败任务详情中的“导出诊断包”按钮会自动带入任务和项目范围。
+
+相关设计和接口边界见[用户诊断包设计](../../../design/user-diagnostic-bundle.mdx)。
+
+## Eagle 外部素材库
+
+内置 Eagle 插件可以从用户配置的 Eagle 服务读取素材、文件夹和标签，并将素材映射为工作台可引用的外部资源。
+
+### 当前能力
+
+- 支持按文件夹、关键词和素材类型查询 Eagle 素材。
+- 素材没有文件夹或标签时，仍返回稳定的空集合，工作台可以继续展示和引用素材。
+- 保留素材的文件夹路径、标签、扩展名、尺寸、大小和修改时间等排障与展示信息。
+
+### 相关实现
+
+- `backend/internal/service/eagle.go`：Eagle 响应解析和集合字段归一化。
+- `web/src/lib/plugins/builtin/eagle.ts`：外部素材映射、预览和引用处理。
+
 ## 画布节点自动整理
 
 画布底部的“自动整理节点”按钮用于快速改善节点排布，适合处理节点散落、间距不一致或流程方向不清晰的画布。

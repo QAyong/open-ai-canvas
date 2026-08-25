@@ -119,6 +119,14 @@ bun install
 bun run dev
 ```
 
+Windows PowerShell 用户也可以在仓库根目录执行一键启动脚本：
+
+```powershell
+.\scripts\start-local.ps1
+```
+
+脚本会使用 `.local/project-workbench-debug` 作为后端开发数据目录，并分别打开前后端窗口。缺少 `web/node_modules` 时会自动执行 `bun install --frozen-lockfile`。详细说明见 [`本地开发`](docs/content/docs/backend/local-development.mdx)。
+
 打开 <http://localhost:3000>，注册第一个管理员账号，再在设置中配置模型渠道。前端的 Vite 配置会把 `/api` 代理到本机 `8080`。
 
 如需修改代理目标，设置 `VITE_API_PROXY_TARGET`；如生产前端与后端不共源，构建时设置 `VITE_CANVAS_BACKEND_URL`。用户的模型 Base URL、API Key 和模型名保存在浏览器本地，真实密钥只应发送到可信且启用 HTTPS 的自部署后端。

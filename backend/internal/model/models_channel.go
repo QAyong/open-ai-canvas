@@ -83,6 +83,8 @@ type ChannelModelPriceTier struct {
 type ApiCallLog struct {
 	ID                  string        `json:"id" gorm:"primaryKey;size:36"`
 	UserID              string        `json:"userId" gorm:"index;size:36;index:idx_api_logs_user_created,priority:1"`
+	TraceID             string        `json:"traceId,omitempty" gorm:"index;size:96"`
+	RequestID           string        `json:"requestId,omitempty" gorm:"index;size:96"`
 	UserDisplayName     string        `json:"userDisplayName,omitempty" gorm:"-"`
 	UserAccount         string        `json:"userAccount,omitempty" gorm:"-"`
 	ChannelID           string        `json:"channelId" gorm:"index;size:36;index:idx_api_logs_channel_created,priority:1"`

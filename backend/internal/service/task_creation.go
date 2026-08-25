@@ -91,7 +91,7 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 	if activeTasks >= int64(policy.Task.ActiveTaskLimit) {
 		return nil, BadAuthRequest(fmt.Sprintf("同时排队或运行的任务最多 %d 个，请等待已有任务完成", policy.Task.ActiveTaskLimit))
 	}
-	task := model.Task{ID: newID(), UserID: userID, SessionID: req.SessionID, ProjectID: req.ProjectID, Type: taskType, Status: model.TaskStatusQueued, Stage: "等待队列调度", Progress: 5, Prompt: prompt, Operation: req.Operation, Provider: req.Provider, Model: req.Model}
+	task := model.Task{ID: newID(), UserID: userID, TraceID: req.TraceID, RequestID: req.RequestID, SessionID: req.SessionID, ProjectID: req.ProjectID, Type: taskType, Status: model.TaskStatusQueued, Stage: "等待队列调度", Progress: 5, Prompt: prompt, Operation: req.Operation, Provider: req.Provider, Model: req.Model}
 	if routed != nil {
 		task.LogicalModelID = routed.LogicalModel.ID
 		task.LogicalModelRevisionID = routed.Revision.ID
@@ -219,7 +219,7 @@ func (s *Service) createTextReplayTask(userID string, req CreateTaskRequest, nor
 		return nil, err
 	}
 	task := model.Task{
-		ID: newID(), UserID: userID, SessionID: req.SessionID, ProjectID: req.ProjectID,
+		ID: newID(), UserID: userID, TraceID: req.TraceID, RequestID: req.RequestID, SessionID: req.SessionID, ProjectID: req.ProjectID,
 		Type: taskType, Status: model.TaskStatusTextReplay, Stage: "文本持久化（前端自管）", Progress: 5,
 		Prompt: prompt, Operation: req.Operation, Provider: req.Provider, Model: strings.TrimSpace(req.Model),
 	}
