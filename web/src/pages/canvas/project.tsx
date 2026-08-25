@@ -1626,6 +1626,7 @@ function InfiniteCanvasPage() {
                 return (
                     <CanvasScriptNodeContent
                         node={contentNode}
+                        nodes={nodesRef.current}
                         batch={visibleGenerationBatch(contentNode)}
                         pipeline={pipeline}
                         scale={viewport.k}
@@ -2429,6 +2430,7 @@ function InfiniteCanvasPage() {
 
                     <CanvasScriptEditor
                         node={activeScriptNode}
+                        nodes={nodes}
                         open={Boolean(activeScriptNode)}
                         onClose={() => setScriptEditorNodeId(null)}
                         onUpdateRows={(rows) => activeScriptNode && replaceScriptRows(activeScriptNode.id, rows)}
