@@ -36,6 +36,7 @@ type PublicChannelModel struct {
 	ModelKey         string                        `json:"modelKey"`
 	DisplayName      string                        `json:"displayName"`
 	Capability       string                        `json:"capability"`
+	Protocol         model.ChannelInterfaceType    `json:"protocol"`
 	CapabilityConfig map[string]any                `json:"capabilityConfig,omitempty"`
 	PriceTiers       []PublicChannelModelPriceTier `json:"priceTiers"`
 	PricingMode      string                        `json:"pricingMode"`
@@ -143,7 +144,7 @@ func (s *Service) sanitizeChannelModel(cm *model.ChannelModel) PublicChannelMode
 	// 转换为公开的价格档
 	publicTiers := make([]PublicChannelModelPriceTier, 0, len(priceTiers))
 	for _, tier := range priceTiers {
-		if !tier.Enabled || !ValidatePriceTierPrice(&tier) {
+		if !tier.Enabled || !tier.PriceConfigured || !ValidatePriceTierPrice(&tier, cm.Capability, cm.Protocol) {
 			continue
 		}
 		publicTiers = append(publicTiers, PublicChannelModelPriceTier{
@@ -180,6 +181,7 @@ func (s *Service) sanitizeChannelModel(cm *model.ChannelModel) PublicChannelMode
 		ModelKey:         cm.ModelKey,
 		DisplayName:      cm.DisplayName,
 		Capability:       cm.Capability,
+		Protocol:         cm.Protocol,
 		CapabilityConfig: capabilityConfig,
 		PriceTiers:       publicTiers,
 		PricingMode:      pricingMode,
