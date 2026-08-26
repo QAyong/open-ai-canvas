@@ -6,7 +6,9 @@ import { createPortraitClearanceTaskRequestSchema, portraitClearanceInputSchema,
 import { applyStylizedRiskFloor, summarizeRisk } from "./risk-rules.js";
 import { buildPortraitReports } from "./reports.js";
 
-const MAX_INPUT_BYTES = 30 * 1024 * 1024;
+// Base64 expands binary input by roughly 4/3; keep the decoded total below
+// 20MB so the signed JSON request remains within Local Runtime's 30MB limit.
+const MAX_INPUT_BYTES = 20 * 1024 * 1024;
 const MODEL_JOB_LEASE_MS = 180_000;
 const MAX_MODEL_JOB_ATTEMPTS = 3;
 
@@ -50,6 +52,9 @@ export class PortraitTaskStoreError extends Error {
 
 export class PortraitTaskStore {
     private readonly active = new Map<string, Promise<void>>();
+    private readonly activeControllers = new Map<string, AbortController>();
+    private readonly taskLocks = new Map<string, Promise<void>>();
+    private readonly deleting = new Set<string>();
 
     constructor(private readonly root: string, private readonly runtimeOwnerId: string) {}
 
@@ -127,8 +132,18 @@ export class PortraitTaskStore {
         return { active: records.filter((record) => this.isRunning(record.taskId) || record.status === "waiting_model").length, recoverable: recoverable.length };
     }
 
+    async recoverableRecords() {
+        return (await this.listAll()).filter((record) => record.status === "queued" || record.status === "running");
+    }
+
     async update(taskId: string, owner: { keyId: string; origin: string }, patch: Partial<Pick<PortraitTaskRecord, "status" | "stage" | "progress" | "processedCandidates" | "totalCandidates" | "errorCode" | "errorMessage" | "completedAt" | "detailsAvailable" | "resultRelativePath" | "reportRelativePaths" | "modelJobs" | "cancelRequested">>) {
+        return this.withTaskLock(taskId, () => this.updateUnlocked(taskId, owner, patch));
+    }
+
+    private async updateUnlocked(taskId: string, owner: { keyId: string; origin: string }, patch: Partial<Pick<PortraitTaskRecord, "status" | "stage" | "progress" | "processedCandidates" | "totalCandidates" | "errorCode" | "errorMessage" | "completedAt" | "detailsAvailable" | "resultRelativePath" | "reportRelativePaths" | "modelJobs" | "cancelRequested">>, allowCancelledTransition = false) {
+        if (this.deleting.has(taskId)) throw new PortraitTaskStoreError("portrait_task_not_found", "任务正在删除", 404);
         const record = await this.get(taskId, owner);
+        if (!allowCancelledTransition && record.status === "cancelled" && patch.status && patch.status !== "cancelled") return record;
         const next: PortraitTaskRecord = { ...record, ...patch, updatedAt: new Date().toISOString() };
         await this.writeRecord(next);
         await this.appendEvent(next, patch.errorCode ? "error" : "state");
@@ -136,23 +151,27 @@ export class PortraitTaskStore {
     }
 
     async prepareRetry(taskId: string, owner: { keyId: string; origin: string }) {
-        const record = await this.get(taskId, owner);
-        for (const directory of ["results", "reports", "candidates", "model-inputs"]) {
-            await fs.rm(path.join(this.taskRoot(record.taskId), directory), { recursive: true, force: true });
-        }
-        return this.update(taskId, owner, {
-            status: "queued",
-            stage: "validating-inputs",
-            progress: 0,
-            processedCandidates: 0,
-            errorCode: undefined,
-            errorMessage: undefined,
-            completedAt: undefined,
-            detailsAvailable: false,
-            resultRelativePath: undefined,
-            reportRelativePaths: undefined,
-            modelJobs: undefined,
-            cancelRequested: false,
+        this.activeControllers.get(taskId)?.abort();
+        await this.active.get(taskId)?.catch(() => undefined);
+        return this.withTaskLock(taskId, async () => {
+            const record = await this.get(taskId, owner);
+            for (const directory of ["results", "reports", "candidates", "model-inputs"]) {
+                await fs.rm(path.join(this.taskRoot(record.taskId), directory), { recursive: true, force: true });
+            }
+            return this.updateUnlocked(taskId, owner, {
+                status: "queued",
+                stage: "validating-inputs",
+                progress: 0,
+                processedCandidates: 0,
+                errorCode: undefined,
+                errorMessage: undefined,
+                completedAt: undefined,
+                detailsAvailable: false,
+                resultRelativePath: undefined,
+                reportRelativePaths: undefined,
+                modelJobs: undefined,
+                cancelRequested: false,
+            }, true);
         });
     }
 
@@ -166,14 +185,21 @@ export class PortraitTaskStore {
     }
 
     async readResult(taskId: string, owner: { keyId: string; origin: string }) {
-        const record = await this.get(taskId, owner);
+        return this.withTaskLock(taskId, async () => {
+            const record = await this.get(taskId, owner);
+            if (!record.resultRelativePath) return undefined;
+            try {
+                const value = await this.readStoredResult(record);
+                return this.syncFailedModelPairs(record, owner, value);
+            } catch {
+                return undefined;
+            }
+        });
+    }
+
+    private async readStoredResult(record: PortraitTaskRecord) {
         if (!record.resultRelativePath) return undefined;
-        try {
-            const value = JSON.parse(await fs.readFile(path.join(this.taskRoot(record.taskId), record.resultRelativePath), "utf8")) as unknown;
-            return this.syncFailedModelPairs(record, owner, value);
-        } catch {
-            return undefined;
-        }
+        return JSON.parse(await fs.readFile(path.join(this.taskRoot(record.taskId), record.resultRelativePath), "utf8")) as unknown;
     }
 
     private async syncFailedModelPairs(record: PortraitTaskRecord, owner: { keyId: string; origin: string }, value: unknown) {
@@ -197,6 +223,10 @@ export class PortraitTaskStore {
     }
 
     async writeReports(taskId: string, owner: { keyId: string; origin: string }, reports: { markdown: string; html: string; docx: Uint8Array }) {
+        return this.withTaskLock(taskId, () => this.writeReportsUnlocked(taskId, owner, reports));
+    }
+
+    private async writeReportsUnlocked(taskId: string, owner: { keyId: string; origin: string }, reports: { markdown: string; html: string; docx: Uint8Array }) {
         const record = await this.get(taskId, owner);
         const reportDirectory = path.join(this.taskRoot(record.taskId), "reports");
         await fs.mkdir(reportDirectory, { recursive: true });
@@ -204,7 +234,7 @@ export class PortraitTaskStore {
         await atomicWrite(path.join(reportDirectory, "clearance-report.html"), reports.html);
         await atomicWriteBytes(path.join(reportDirectory, "clearance-report.docx"), reports.docx);
         const reportRelativePaths = { md: "reports/clearance-report.md", html: "reports/clearance-report.html", docx: "reports/clearance-report.docx" } as const;
-        return this.update(taskId, owner, { reportRelativePaths });
+        return this.updateUnlocked(taskId, owner, { reportRelativePaths });
     }
 
     async readReport(taskId: string, owner: { keyId: string; origin: string }, artifactId: string) {
@@ -223,9 +253,13 @@ export class PortraitTaskStore {
     }
 
     async ensureModelJobs(taskId: string, owner: { keyId: string; origin: string }) {
+        return this.withTaskLock(taskId, () => this.ensureModelJobsUnlocked(taskId, owner));
+    }
+
+    private async ensureModelJobsUnlocked(taskId: string, owner: { keyId: string; origin: string }) {
         const record = await this.get(taskId, owner);
         if (record.modelJobs?.length) return record.modelJobs;
-        const result = portraitClearanceResultSchema.parse(await this.readResult(taskId, owner));
+        const result = portraitClearanceResultSchema.parse(await this.readStoredResult(record));
         const modelJobs = result.pairs.map((pair) => portraitModelJobSchema.parse({
             jobId: `portrait-job-${crypto.randomBytes(16).toString("hex")}`,
             taskId: record.taskId,
@@ -242,15 +276,23 @@ export class PortraitTaskStore {
     }
 
     async claimModelJob(taskId: string, owner: { keyId: string; origin: string }): Promise<PortraitModelJob | undefined> {
+        return this.withTaskLock(taskId, () => this.claimModelJobUnlocked(taskId, owner));
+    }
+
+    private async claimModelJobUnlocked(taskId: string, owner: { keyId: string; origin: string }): Promise<PortraitModelJob | undefined> {
         const record = await this.get(taskId, owner);
         const modelJobs = record.modelJobs || [];
         const now = Date.now();
+        let changed = false;
         const exhausted = modelJobs.find((job) => job.status === "leased" && job.attempt > MAX_MODEL_JOB_ATTEMPTS && job.leaseToken && job.leaseExpiresAt && Date.parse(job.leaseExpiresAt) > now);
         if (exhausted?.leaseToken) {
-            await this.failModelJob(taskId, owner, exhausted.jobId, { attempt: exhausted.attempt, leaseToken: exhausted.leaseToken, errorCode: "portrait_model_attempts_exhausted", errorMessage: "该候选视觉模型多次未完成，已跳过此候选", retryable: false });
-            return this.claimModelJob(taskId, owner);
+            exhausted.status = "failed";
+            exhausted.errorCode = "portrait_model_attempts_exhausted";
+            exhausted.errorMessage = "该候选视觉模型多次未完成，已跳过此候选";
+            exhausted.leaseToken = undefined;
+            exhausted.leaseExpiresAt = undefined;
+            changed = true;
         }
-        let changed = false;
         for (const job of modelJobs) {
             if (job.status === "leased" && (!job.leaseExpiresAt || Date.parse(job.leaseExpiresAt) <= now)) {
                 job.status = "pending";
@@ -273,15 +315,19 @@ export class PortraitTaskStore {
     }
 
     async completeModelJob(taskId: string, owner: { keyId: string; origin: string }, jobId: string, request: unknown) {
+        return this.withTaskLock(taskId, () => this.completeModelJobUnlocked(taskId, owner, jobId, request));
+    }
+
+    private async completeModelJobUnlocked(taskId: string, owner: { keyId: string; origin: string }, jobId: string, request: unknown) {
         const parsed = portraitModelJobCompleteRequestSchema.parse(request);
         const record = await this.get(taskId, owner);
         if (record.status === "cancelled") throw new PortraitTaskStoreError("portrait_model_job_conflict", "任务已停止，不能继续提交视觉模型结果", 409);
         const jobs = record.modelJobs || [];
         const job = jobs.find((candidate) => candidate.jobId === jobId);
         if (!job) throw new PortraitTaskStoreError("portrait_model_job_not_found", "模型作业不存在", 404);
-        if (job.status === "completed") return { record, result: await this.readResult(taskId, owner), job };
+        if (job.status === "completed") return { record, result: await this.readStoredResult(record), job };
         assertLeasedJob(job, parsed.attempt, parsed.leaseToken);
-        const result = portraitClearanceResultSchema.parse(await this.readResult(taskId, owner));
+        const result = portraitClearanceResultSchema.parse(await this.readStoredResult(record));
         const pair = result.pairs.find((candidate) => candidate.id === job.pairId);
         if (!pair) throw new PortraitTaskStoreError("portrait_model_job_conflict", "模型作业对应的比对结果不存在", 409);
         const vision = applyStylizedRiskFloor(parsed.visionComparison);
@@ -301,11 +347,15 @@ export class PortraitTaskStore {
             await atomicWrite(path.join(this.taskRoot(record.taskId), record.resultRelativePath || "results/clearance-result.json"), JSON.stringify(finalResult, null, 2));
             await this.refreshReports(taskId, owner, finalResult);
         }
-        const updated = await this.update(taskId, owner, complete ? { status: jobs.some((candidate) => candidate.status === "failed") || finalResult.pairs.some((candidate) => candidate.status !== "success") ? "partial" : "completed", stage: "done", progress: 1, processedCandidates: finalResult.pairs.length, completedAt } : { processedCandidates: jobs.filter((candidate) => candidate.status === "completed").length, progress: 0.92 + (jobs.filter((candidate) => candidate.status === "completed").length / Math.max(1, jobs.length)) * 0.08, stage: "model-comparing", status: "waiting_model" });
+        const updated = await this.updateUnlocked(taskId, owner, complete ? { status: jobs.some((candidate) => candidate.status === "failed") || finalResult.pairs.some((candidate) => candidate.status !== "success") ? "partial" : "completed", stage: "done", progress: 1, processedCandidates: finalResult.pairs.length, completedAt } : { processedCandidates: jobs.filter((candidate) => candidate.status === "completed").length, progress: 0.92 + (jobs.filter((candidate) => candidate.status === "completed").length / Math.max(1, jobs.length)) * 0.08, stage: "model-comparing", status: "waiting_model" });
         return { record: updated, result: finalResult, job };
     }
 
     async failModelJob(taskId: string, owner: { keyId: string; origin: string }, jobId: string, request: unknown) {
+        return this.withTaskLock(taskId, () => this.failModelJobUnlocked(taskId, owner, jobId, request));
+    }
+
+    private async failModelJobUnlocked(taskId: string, owner: { keyId: string; origin: string }, jobId: string, request: unknown) {
         const parsed = portraitModelJobFailRequestSchema.parse(request);
         const record = await this.get(taskId, owner);
         if (record.status === "cancelled") throw new PortraitTaskStoreError("portrait_model_job_conflict", "任务已停止，不能继续提交视觉模型结果", 409);
@@ -314,7 +364,7 @@ export class PortraitTaskStore {
         if (!job) throw new PortraitTaskStoreError("portrait_model_job_not_found", "模型作业不存在", 404);
         if (job.status === "failed") return { record, job };
         assertLeasedJob(job, parsed.attempt, parsed.leaseToken);
-        let result = portraitClearanceResultSchema.parse(await this.readResult(taskId, owner));
+        let result = portraitClearanceResultSchema.parse(await this.readStoredResult(record));
         if (parsed.retryable && job.attempt < 3) {
             job.status = "pending";
             job.leaseToken = undefined;
@@ -345,7 +395,7 @@ export class PortraitTaskStore {
             await atomicWrite(path.join(this.taskRoot(record.taskId), record.resultRelativePath || "results/clearance-result.json"), JSON.stringify(finalResult, null, 2));
             await this.refreshReports(taskId, owner, finalResult);
         }
-        const updated = complete ? await this.update(taskId, owner, { status: "partial", stage: "done", progress: 1, completedAt: new Date().toISOString() }) : await this.update(taskId, owner, { status: "waiting_model", stage: "waiting-for-model" });
+        const updated = complete ? await this.updateUnlocked(taskId, owner, { status: "partial", stage: "done", progress: 1, completedAt: new Date().toISOString() }) : await this.updateUnlocked(taskId, owner, { status: "waiting_model", stage: "waiting-for-model" });
         return { record: updated, job };
     }
 
@@ -381,16 +431,36 @@ export class PortraitTaskStore {
     }
 
     async requestCancel(taskId: string, owner: { keyId: string; origin: string }) {
-        const record = await this.get(taskId, owner);
-        if (isTerminal(record.status)) return record;
-        return this.update(taskId, owner, { cancelRequested: true, status: "cancelled", stage: "done", errorCode: "portrait_task_cancelled", errorMessage: "任务已停止", completedAt: new Date().toISOString() });
+        return this.withTaskLock(taskId, async () => {
+            const record = await this.get(taskId, owner);
+            if (isTerminal(record.status)) return record;
+            const next = await this.updateUnlocked(taskId, owner, { cancelRequested: true, status: "cancelled", stage: "done", errorCode: "portrait_task_cancelled", errorMessage: "任务已停止", completedAt: new Date().toISOString() });
+            this.activeControllers.get(taskId)?.abort();
+            return next;
+        });
     }
 
     async delete(taskId: string, owner: { keyId: string; origin: string }) {
-        const record = await this.get(taskId, owner);
-        await fs.rm(this.taskRoot(record.taskId), { recursive: true, force: false }).catch(() => { throw new PortraitTaskStoreError("portrait_task_delete_failed", "删除本地排查数据失败", 500); });
-        this.active.delete(taskId);
-        return { deleted: true as const };
+        await this.withTaskLock(taskId, async () => {
+            const record = await this.get(taskId, owner);
+            if (!isTerminal(record.status)) {
+                await this.updateUnlocked(taskId, owner, { cancelRequested: true, status: "cancelled", stage: "done", errorCode: "portrait_task_cancelled", errorMessage: "任务已停止", completedAt: new Date().toISOString() });
+            }
+            this.deleting.add(taskId);
+            this.activeControllers.get(taskId)?.abort();
+        });
+        try {
+            await this.active.get(taskId)?.catch(() => undefined);
+            return await this.withTaskLock(taskId, async () => {
+                const record = await this.get(taskId, owner);
+                await fs.rm(this.taskRoot(record.taskId), { recursive: true, force: false }).catch(() => { throw new PortraitTaskStoreError("portrait_task_delete_failed", "删除本地排查数据失败", 500); });
+                return { deleted: true as const };
+            });
+        } finally {
+            this.active.delete(taskId);
+            this.activeControllers.delete(taskId);
+            this.deleting.delete(taskId);
+        }
     }
 
     async events(taskId: string, owner: { keyId: string; origin: string }, afterId?: string) {
@@ -418,10 +488,15 @@ export class PortraitTaskStore {
         return filePath;
     }
 
-    start(taskId: string, runner: (record: PortraitTaskRecord) => Promise<void>) {
-        if (this.active.has(taskId)) return;
-        const promise = this.readRecord(taskId).then(runner).finally(() => this.active.delete(taskId));
+    start(taskId: string, runner: (record: PortraitTaskRecord, signal: AbortSignal) => Promise<void>) {
+        if (this.active.has(taskId) || this.deleting.has(taskId)) return;
+        const controller = new AbortController();
+        const promise = this.readRecord(taskId).then((record) => runner(record, controller.signal)).finally(() => {
+            if (this.active.get(taskId) === promise) this.active.delete(taskId);
+            if (this.activeControllers.get(taskId) === controller) this.activeControllers.delete(taskId);
+        });
         this.active.set(taskId, promise);
+        this.activeControllers.set(taskId, controller);
         void promise.catch(() => undefined);
     }
 
@@ -445,6 +520,21 @@ export class PortraitTaskStore {
             try { records.push(await this.readRecord(entry.name)); } catch { /* ignore torn/foreign directories */ }
         }
         return records;
+    }
+
+    private async withTaskLock<T>(taskId: string, action: () => Promise<T>): Promise<T> {
+        const previous = this.taskLocks.get(taskId) || Promise.resolve();
+        let release!: () => void;
+        const gate = new Promise<void>((resolve) => { release = resolve; });
+        const queued = previous.then(() => gate);
+        this.taskLocks.set(taskId, queued);
+        await previous;
+        try {
+            return await action();
+        } finally {
+            release();
+            if (this.taskLocks.get(taskId) === queued) this.taskLocks.delete(taskId);
+        }
     }
 
     private async readRecord(taskId: string) {
@@ -493,7 +583,7 @@ export class PortraitTaskStore {
                 // A report remains useful when a deleted or unavailable candidate image cannot be embedded.
             }
         }
-        await this.writeReports(taskId, owner, await buildPortraitReports(result, images));
+        await this.writeReportsUnlocked(taskId, owner, await buildPortraitReports(result, images));
     }
 }
 

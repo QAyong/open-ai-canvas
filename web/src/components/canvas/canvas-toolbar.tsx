@@ -14,7 +14,7 @@ import { canvasThemes, type CanvasBackgroundMode, type CanvasColorTheme, type Ca
 import { defaultToolbarPrefs, readToolbarPrefs, resolveAddNodeMenuCommands, resolveToolbarEntries, type AddNodeMenuCommand, type ToolContext, type ToolbarHandlers, type ToolbarPrefs } from "@/lib/canvas/tool-registry";
 import { useThemeStore } from "@/stores/use-theme-store";
 import { usePluginStore } from "@/stores/use-plugin-store";
-import type { CanvasNodeType, CanvasToolMode, CanvasWorkspaceMode } from "@/types/canvas";
+import type { CanvasNodeTypeId, CanvasToolMode, CanvasWorkspaceMode } from "@/types/canvas";
 
 export function CanvasToolbar({
     selectedCount,
@@ -36,6 +36,7 @@ export function CanvasToolbar({
     onAddFolder,
     onAddDrawing,
     onAddExtensionNode,
+    onAddWorkflow,
     onOpenDirector,
     onUndo,
     onRedo,
@@ -66,7 +67,8 @@ export function CanvasToolbar({
     onAddFrame: () => void;
     onAddFolder: () => void;
     onAddDrawing: () => void;
-    onAddExtensionNode: (type: CanvasNodeType) => void;
+    onAddExtensionNode: (type: CanvasNodeTypeId) => void;
+    onAddWorkflow: () => void;
     onOpenDirector: () => void;
     onUndo: () => void;
     onRedo: () => void;
@@ -131,6 +133,7 @@ export function CanvasToolbar({
         onAddFolder,
         onAddDrawing,
         onAddExtensionNode,
+        onAddWorkflow,
         onChooseStyle,
         onOpenDirector,
         onUpload,
@@ -241,7 +244,7 @@ function AddNodeMenu({ x, theme, commands }: {
     commands: CanvasCreateCommand[];
 }) {
     return (
-        <motion.div initial={{ opacity: 0, scaleY: 0.9, y: 8 }} animate={{ opacity: 1, scaleY: 1, y: 0 }} exit={{ opacity: 0, scaleY: 0.92, y: 6 }} transition={{ duration: aceternityMotion.duration.panel, ease: aceternityMotion.easing.enter }} className="pointer-events-auto absolute bottom-[var(--canvas-dock-popover-offset)] z-[var(--dock-z-popover)] w-[260px] max-w-[calc(100vw-24px)]" style={{ left: x || "50%", transformOrigin: "bottom center", x: "-50%" }}>
+        <motion.div initial={{ opacity: 0, scaleY: 0.9, y: 8 }} animate={{ opacity: 1, scaleY: 1, y: 0 }} exit={{ opacity: 0, scaleY: 0.92, y: 6 }} transition={{ duration: aceternityMotion.duration.panel, ease: aceternityMotion.easing.enter }} className="pointer-events-auto absolute bottom-[var(--canvas-dock-popover-offset)] z-[var(--dock-z-popover)] w-[420px] max-w-[calc(100vw-24px)]" style={{ left: x || "50%", transformOrigin: "bottom center", x: "-50%" }}>
             <SpotlightSurface spotlightColor={theme.toolbar.itemHover} initial={{ opacity: 0, scale: 0.97 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.97, transition: { duration: 0 } }} transition={{ duration: aceternityMotion.duration.instant, ease: aceternityMotion.easing.enter }} className="aceternity-floating-panel overflow-hidden rounded-[var(--panel-radius)] border p-2 backdrop-blur-2xl" style={{ background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.node.text }} onWheel={(event) => event.stopPropagation()}>
                 <CanvasCreateMenu commands={commands} />
             </SpotlightSurface>

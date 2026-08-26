@@ -128,6 +128,8 @@ export function PortraitClearanceModal({ projectId, node, upstreamNodes, open, o
                 const file = await imageNodeDataUrl(item);
                 return { ...file, nodeId: item.id, role };
             }));
+            const inputBytes = inputs.reduce((total, item) => total + decodedDataUrlBytes(item.dataUrl), 0);
+            if (inputBytes > 20 * 1024 * 1024) throw new Error("肖像排查图片总大小不能超过 20MB");
             const task = await createPortraitClearanceTask({
                 projectId,
                 nodeId: node.id,
@@ -332,6 +334,11 @@ export function PortraitClearanceModal({ projectId, node, upstreamNodes, open, o
             </div>
         </Modal>
     );
+}
+
+function decodedDataUrlBytes(dataUrl: string) {
+    const payload = dataUrl.slice(dataUrl.indexOf(",") + 1).replace(/=+$/, "");
+    return Math.floor(payload.length * 3 / 4);
 }
 
 function PortraitInputCard({ label, node, ready }: { label: string; node?: CanvasNodeData; ready: boolean }) {

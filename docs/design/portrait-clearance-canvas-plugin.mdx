@@ -117,11 +117,10 @@
 export const PORTRAIT_CLEARANCE_PLUGIN_ID = "portrait-clearance";
 
 const manifest: PluginManifest = {
+    apiVersion: "yingce.plugin/v1",
     id: PORTRAIT_CLEARANCE_PLUGIN_ID,
     name: "肖像权可识别性排查",
     version: "0.1.0",
-    apiVersion: "1",
-    category: "canvas-node",
     description: "对虚拟人和人物图片执行本地人脸预检、网络候选排查与审慎风险报告。",
     author: "影策团队",
     surfaces: ["node", "fullscreen"],
@@ -131,22 +130,24 @@ const manifest: PluginManifest = {
         "asset.read",
         "asset.import",
         "ai.text",
-        "external.network",
-        "external.upload",
         "external.open",
     ],
     trusted: true,
+    runtime: { backend: "trusted-backend", web: "declarative" },
+    contributes: {
+        canvasNodes: [{
+            id: "portrait-clearance",
+            label: "肖像排查",
+            defaultTitle: "肖像可识别性排查",
+            defaultSize: { width: 560, height: 420 },
+            schema: { type: "object", properties: { portraitClearance: { type: "object" } } },
+            renderer: "declarative",
+        }],
+    },
 };
 ```
 
-需要在 `PluginPermission` 和插件中心权限文案中新增：
-
-- `external.network`：访问外部检索页并下载候选。
-- `external.upload`：把用户触发网络排查的查询图上传到外部搜图服务。
-
-同时补齐现有 `ai.text` 的中文权限文案，例如“调用已配置的文本/视觉理解模型”，避免插件中心直接显示内部枚举值。
-
-`external.open` 只代表打开候选来源页，不能代替上传权限。
+继续使用现有 `PluginPermission`，不为合并本功能扩展插件协议。`ai.text` 补齐中文权限文案；网络检索和上传发生在具备独立签名 scope 的可信 Local Runtime 中，必须在排查工作台常驻告知，不能伪装成 `external.open` 权限。
 
 ### 4.2 安装和启停
 
@@ -161,8 +162,8 @@ const manifest: PluginManifest = {
 
 首版无需建设通用远程 UI 插件加载器。采用以下最小实现：
 
-1. `CanvasNodeType` 增加编译期成员。
-2. 节点定义和渲染器随 Web 构建静态注册。
+1. 节点 ID 继续走 `CanvasNodeTypeId` 扩展边界，不增加 `CanvasNodeType` 内置枚举成员。
+2. 节点定义由 `yingce.plugin/v1` 的 `contributes.canvasNodes` 注册；可信内置节点的专用渲染器随 Web 构建接入。
 3. 插件安装状态只控制创建入口、运行入口和权限提示。
 4. 节点组件自行读取安装状态，停用时呈现只读态。
 5. 添加节点菜单的 `applicable` 根据插件是否启用过滤。
@@ -172,10 +173,7 @@ const manifest: PluginManifest = {
 ### 5.1 节点定义
 
 ```ts
-export enum CanvasNodeType {
-    // existing members...
-    PortraitClearance = "portrait-clearance",
-}
+export const PORTRAIT_CLEARANCE_NODE_TYPE = "portrait-clearance" as const;
 ```
 
 建议规格：
@@ -643,7 +641,7 @@ usable:
 
 ### 10.4 外部上传告知
 
-启用插件时展示 `external.upload` 权限。用户在网络模式点击“开始排查”即表示授权本次任务上传查询图，不再对同一任务重复弹确认框。运行区仍要显示“查询图将上传到百度识图”的常驻提示。
+插件详情和运行区都要说明网络模式会把查询图上传到百度识图。用户点击“开始排查”即表示授权本次任务上传查询图，不再对同一任务重复弹确认框；运行区仍保留常驻提示。
 
 如果验证码、网络或网页结构阻断，任务进入可恢复错误，提供“用可见浏览器重试”和“改用手动候选”；不得悄悄改用其他搜索服务。
 
@@ -964,13 +962,10 @@ web/src/pages/canvas/use-portrait-clearance-coordinator.ts
 
 ```text
 web/src/types/canvas.ts
-    新节点枚举和 metadata 字段
+    保留 CanvasNodeTypeId 扩展边界并声明紧凑 metadata 字段
 
-web/src/constant/canvas.ts
-    默认尺寸和 metadata
-
-web/src/lib/canvas/node-registry/definitions/builtin-nodes.tsx
-    节点 trait；调整内置节点 exhaustive 类型边界
+web/src/lib/plugins/builtin/portrait-clearance.ts
+    通过 yingce.plugin/v1 contributes.canvasNodes 注册节点定义
 
 web/src/components/canvas/canvas-node-content.tsx
     注册 PortraitClearanceNodeContent
@@ -984,12 +979,9 @@ web/src/lib/canvas/tool-registry/definitions/add-node-menu-tools.tsx
 web/src/pages/canvas/project.tsx
     portraitClearanceNodeId、Modal、协调器和 metadata 更新
 
-web/src/lib/plugins/plugin-types.ts
-    external.network / external.upload
-
 web/src/pages/plugins/index.tsx
 web/src/pages/plugins/plugin-documentation.ts
-    权限中文文案
+    ai.text 权限中文文案
 
 web/src/components/layout/app-providers.tsx 或相邻 bootstrap
     应用启动时 ensure 内置插件

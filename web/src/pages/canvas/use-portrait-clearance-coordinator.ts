@@ -2,7 +2,7 @@ import { useEffect, useRef } from "react";
 
 import { readPortraitTask, readPortraitTaskImage, readPortraitTaskResult, claimPortraitModelJob, completePortraitModelJob, failPortraitModelJob, type PortraitRuntimeTask } from "@/services/portrait-clearance-runtime";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
-import { type PortraitClearanceNodeState, type PortraitRiskLevel } from "@/lib/portrait-clearance/contracts";
+import { PORTRAIT_CLEARANCE_NODE_TYPE, type PortraitClearanceNodeState, type PortraitRiskLevel } from "@/lib/portrait-clearance/contracts";
 import { portraitVisionMessages, portraitVisionModelError, resolvePortraitVisionModel, parsePortraitVisionToolResponse, portraitVisionTool } from "@/lib/portrait-clearance/vision";
 import { requestToolResponse } from "@/services/api/image";
 import { resolveModelChannel, useEffectiveConfig } from "@/stores/use-config-store";
@@ -26,7 +26,7 @@ export function usePortraitClearanceCoordinator({ nodes, onUpdateState }: Portra
         const poll = async () => {
             if (disposed || runningRef.current) return;
             const active = nodesRef.current.filter((node) => {
-                if (node.type !== CanvasNodeType.PortraitClearance) return false;
+                if (node.type !== PORTRAIT_CLEARANCE_NODE_TYPE) return false;
                 const task = node.metadata?.portraitClearance;
                 return Boolean(task?.activeTaskId && task.task?.status !== "completed" && task.task?.status !== "partial" && task.task?.status !== "failed" && task.task?.status !== "cancelled");
             });

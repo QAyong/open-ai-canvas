@@ -1,6 +1,5 @@
 import { ChartColumn, Clapperboard, Code, Columns2, FileText, Globe, Image as ImageIcon, Music2, PanelTop, Palette, Pencil, Settings2, Shapes, Sparkles, Type, Video } from "lucide-react";
 
-import { PortraitClearanceIcon } from "@/components/canvas/portrait-clearance/portrait-clearance-icon";
 import { NODE_SPECS } from "@/constant/canvas";
 import { MEDIA_NODE_MIN_SIZE } from "@/lib/canvas/canvas-node-size";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
@@ -17,8 +16,7 @@ const DEFAULT_MIN_SIZE = { width: 220, height: 160 } as const;
  * 尺寸、默认标题与初始 metadata 不在这里重复——它们的数据源是 constant/canvas.ts 的
  * NODE_SPECS，下方装配时统一读取。
  *
- * `satisfies Record<CanvasNodeType, …>` 是刻意的：往 CanvasNodeType 加成员后若不补定义，
- * 这里会编译失败，而不是在运行期悄悄回落成兜底值。
+ * 内置节点保持集中定义；第三方节点通过同一 registry 以命名空间 ID 动态注册。
  */
 const BUILTIN_NODE_TRAITS = {
     [CanvasNodeType.Image]: {
@@ -167,16 +165,7 @@ const BUILTIN_NODE_TRAITS = {
         resourceKind: () => "image",
         inputKind: "image",
     },
-    [CanvasNodeType.PortraitClearance]: {
-        label: "肖像排查",
-        icon: <PortraitClearanceIcon />,
-        minSize: { width: 420, height: 300 },
-        showInCreateMenu: true,
-        // 排查节点消费图片，但不作为素材或生成输入输出；结果通过节点状态和工作台查看。
-        showOutputConnection: false,
-        inputKind: "image",
-    },
-} satisfies Record<CanvasNodeType, Omit<CanvasNodeDefinition, "type" | "defaultTitle" | "defaultSize" | "defaultMetadata">>;
+} satisfies Record<string, Omit<CanvasNodeDefinition, "type" | "defaultTitle" | "defaultSize" | "defaultMetadata">>;
 
 export const BUILTIN_NODE_DEFINITIONS: CanvasNodeDefinition[] = (Object.keys(BUILTIN_NODE_TRAITS) as CanvasNodeType[]).map((type) => {
     const spec = NODE_SPECS[type];

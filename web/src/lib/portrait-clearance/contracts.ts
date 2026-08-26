@@ -7,6 +7,7 @@
 
 export const PORTRAIT_CLEARANCE_SCHEMA_VERSION = 1 as const;
 export const PORTRAIT_CLEARANCE_PLUGIN_ID = "portrait-clearance" as const;
+export const PORTRAIT_CLEARANCE_NODE_TYPE = "portrait-clearance" as const;
 
 export type PortraitRiskLevel =
     | "high"

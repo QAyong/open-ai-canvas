@@ -232,7 +232,7 @@ export function createPortraitClearanceHttpModule(options: PortraitClearanceHttp
             },
         ],
         start: async () => {
-            // Recoverable tasks are claimed when the signed web session lists this module's history.
+            for (const record of await store.recoverableRecords()) runner.start(record);
         },
         publicHealth: () => ({ portraitClearance: "available" }),
     };

@@ -1,6 +1,5 @@
 import { CanvasNodeType } from "@/types/canvas";
 import type { CanvasNodeMetadata } from "@/types/canvas";
-import { createDefaultPortraitClearanceState } from "@/lib/portrait-clearance/contracts";
 
 type CanvasNodeSpec = {
     width: number;
@@ -15,7 +14,8 @@ export const NODE_DEFAULT_SIZE = {
     [CanvasNodeType.Drawing]: { width: 440, height: 300, title: "绘图" },
     [CanvasNodeType.Script]: { width: 920, height: 360, title: "分镜脚本" },
     [CanvasNodeType.Skill]: { width: 360, height: 220, title: "技能" },
-    [CanvasNodeType.Config]: { width: 340, height: 300, title: "生成配置" },
+    // 配置节点同时承载模式、渠道、工作流和参数；预留稳定空间，避免控件和错误状态互相挤压。
+    [CanvasNodeType.Config]: { width: 480, height: 390, title: "生成配置" },
     [CanvasNodeType.Video]: { width: 720, height: 405, title: "视频" },
     [CanvasNodeType.Audio]: { width: 340, height: 120, title: "Audio" },
     [CanvasNodeType.Frame]: { width: 760, height: 520, title: "未命名背板" },
@@ -26,7 +26,6 @@ export const NODE_DEFAULT_SIZE = {
     [CanvasNodeType.Compare]: { width: 520, height: 320, title: "对比" },
     [CanvasNodeType.Chart]: { width: 480, height: 320, title: "图表" },
     [CanvasNodeType.ColorGrade]: { width: 420, height: 360, title: "调色" },
-    [CanvasNodeType.PortraitClearance]: { width: 560, height: 420, title: "肖像可识别性排查" },
 } satisfies Record<CanvasNodeType, { width: number; height: number; title: string }>;
 
 export const NODE_SPECS = {
@@ -101,10 +100,6 @@ export const NODE_SPECS = {
     [CanvasNodeType.ColorGrade]: {
         ...NODE_DEFAULT_SIZE[CanvasNodeType.ColorGrade],
         metadata: { status: "idle" },
-    },
-    [CanvasNodeType.PortraitClearance]: {
-        ...NODE_DEFAULT_SIZE[CanvasNodeType.PortraitClearance],
-        metadata: { portraitClearance: createDefaultPortraitClearanceState() },
     },
 } satisfies Record<CanvasNodeType, CanvasNodeSpec>;
 

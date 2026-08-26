@@ -18,6 +18,7 @@ const MODEL_FILES = {
 } as const;
 const MODEL_DOWNLOAD_MAX_REDIRECTS = 3;
 const verificationCache = new Map<string, { size: number; mtimeMs: number; valid: boolean }>();
+const activeInstalls = new Map<string, Promise<Awaited<ReturnType<typeof performPortraitModelInstall>>>>();
 
 export type PortraitModelStatus = {
     modelPack: typeof MODEL_PACK;
@@ -45,6 +46,17 @@ export async function portraitModelStatus(root: string): Promise<PortraitModelSt
 }
 
 export async function installPortraitModels(root: string, options: { signal?: AbortSignal; fetch?: typeof fetch } = {}) {
+    const key = path.resolve(root);
+    const active = activeInstalls.get(key);
+    if (active) return active;
+    const install = performPortraitModelInstall(root, options).finally(() => {
+        if (activeInstalls.get(key) === install) activeInstalls.delete(key);
+    });
+    activeInstalls.set(key, install);
+    return install;
+}
+
+async function performPortraitModelInstall(root: string, options: { signal?: AbortSignal; fetch?: typeof fetch } = {}) {
     const fetchImpl = options.fetch ?? fetch;
     const current = await portraitModelStatus(root);
     if (current.ready) return { ...current, downloaded: false };

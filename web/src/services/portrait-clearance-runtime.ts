@@ -113,7 +113,7 @@ export async function downloadPortraitReport(taskId: string, artifactId: "cleara
 
 export async function claimPortraitModelJob(taskId: string, signal?: AbortSignal) {
     const value = await requestJson<unknown>(`/portrait-clearance/tasks/${encodeURIComponent(taskId)}/model-jobs/claim`, { method: "POST", body: "{}", headers: { "content-type": "application/json" }, signal });
-    if (!isRecord(value) || value.ok !== true || value.job === null && value.job !== undefined && !isRecord(value.job)) throw new LocalRuntimeClientError("runtime_response_invalid", "本机视觉模型作业响应无效");
+    if (!isRecord(value) || value.ok !== true || (value.job !== null && value.job !== undefined && !isRecord(value.job))) throw new LocalRuntimeClientError("runtime_response_invalid", "本机视觉模型作业响应无效");
     return value.job === null || value.job === undefined ? null : parseModelJob(value.job);
 }
 
@@ -156,6 +156,7 @@ export async function imageNodeDataUrl(node: CanvasNodeData, signal?: AbortSigna
     const response = await fetchImage(value, signal);
     const mimeType = imageMime(response.headers.get("content-type") || response.type, node.metadata?.mimeType);
     const bytes = new Uint8Array(await response.arrayBuffer());
+    if (!bytes.byteLength || bytes.byteLength > 12 * 1024 * 1024) throw new Error("单张肖像排查图片不能超过 12MB");
     const dataUrl = `data:${mimeType};base64,${bytesToBase64(bytes)}`;
     return { dataUrl, mimeType, fileName: node.title || `${node.id}.${mimeType === "image/jpeg" ? "jpg" : mimeType.slice("image/".length)}` };
 }

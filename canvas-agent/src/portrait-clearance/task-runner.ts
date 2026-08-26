@@ -29,7 +29,7 @@ export class PortraitTaskRunner {
     constructor(private readonly store: PortraitTaskStore, private readonly faceEngine: PortraitFaceEngine) {}
 
     start(record: PortraitTaskRecord) {
-        this.store.start(record.taskId, (current) => this.run(current));
+        this.store.start(record.taskId, (current, signal) => this.run(current, signal));
     }
 
     async recover(owner: { keyId: string; origin: string }) {
@@ -37,22 +37,24 @@ export class PortraitTaskRunner {
         for (const summary of page.tasks) if (summary.status === "queued" || summary.status === "running") this.start(await this.store.get(summary.taskId, owner));
     }
 
-    private async run(initial: PortraitTaskRecord) {
+    private async run(initial: PortraitTaskRecord, signal: AbortSignal) {
         const owner = { keyId: initial.keyId, origin: initial.origin };
         try {
-            if (initial.cancelRequested || initial.status === "cancelled") return;
-            if (initial.mode === "direct-compare") await this.runDirect(initial, owner);
-            else await this.runNetwork(initial, owner);
+            if (signal.aborted || initial.cancelRequested || initial.status === "cancelled") return;
+            if (initial.mode === "direct-compare") await this.runDirect(initial, owner, signal);
+            else await this.runNetwork(initial, owner, signal);
         } catch (error) {
-            if (isAbort(error) || initial.cancelRequested) return;
+            if (isAbort(error) || signal.aborted) return;
+            const current = await this.store.get(initial.taskId, owner).catch(() => undefined);
+            if (!current || current.cancelRequested || current.status === "cancelled") return;
             const detail = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
             console.error(`[portrait-clearance] task ${initial.taskId} failed: ${detail}`);
             const code = error instanceof PortraitFaceEngineError ? error.code : error instanceof PortraitCandidateDownloadError ? error.code : "portrait_face_engine_failed";
-            await fail(this.store, initial, owner, code, publicErrorMessage(code));
+            await fail(this.store, current, owner, code, publicErrorMessage(code));
         }
     }
 
-    private async runDirect(initial: PortraitTaskRecord, owner: { keyId: string; origin: string }) {
+    private async runDirect(initial: PortraitTaskRecord, owner: { keyId: string; origin: string }, signal: AbortSignal) {
         const query = initial.inputs.find((input) => input.role === "query");
         const reference = initial.inputs.find((input) => input.role === "reference");
         if (!query || !reference) return fail(this.store, initial, owner, "portrait_input_missing", "直接比对需要一张查询图和一张参考图");
@@ -69,7 +71,7 @@ export class PortraitTaskRunner {
         }
         record = await this.store.update(record.taskId, owner, { stage: "local-comparing", progress: 0.35, processedCandidates: 0, totalCandidates: 1 });
         const [queryFaces, referenceFaces] = await Promise.all([this.faceEngine.analyze(queryImage), this.faceEngine.analyze(referenceImage)]);
-        if (await this.cancelled(record, owner)) return;
+        if (await this.cancelled(record, owner, signal)) return;
         const localPrecheck = buildLocalPrecheck(queryImage, referenceImage, queryFaces, referenceFaces);
         const pair: PortraitPairResult = {
             id: "pair-1",
@@ -87,7 +89,7 @@ export class PortraitTaskRunner {
         return this.persistResult(record, owner, query.id, [pair], [{ id: reference.id, artifactId: reference.id, originalRank: 0, title: reference.fileName, source: "connected", mimeType: reference.mimeType, bytes: await this.readInputBytes(record, owner, reference.id), decoded: referenceImage }], []);
     }
 
-    private async runNetwork(initial: PortraitTaskRecord, owner: { keyId: string; origin: string }) {
+    private async runNetwork(initial: PortraitTaskRecord, owner: { keyId: string; origin: string }, signal: AbortSignal) {
         const query = initial.inputs.find((input) => input.role === "query");
         if (!query) return fail(this.store, initial, owner, "portrait_input_missing", "网络排查需要一张查询图");
         let record = await this.store.update(initial.taskId, owner, { status: "running", stage: "checking-model-resources", progress: 0.06 });
@@ -117,12 +119,12 @@ export class PortraitTaskRunner {
                 if (!manualCandidates.length) return fail(this.store, record, owner, error.code, error.message);
             } else throw error;
         }
-        if (await this.cancelled(record, owner)) return;
+        if (await this.cancelled(record, owner, signal)) return;
         record = await this.store.update(record.taskId, owner, { stage: "downloading-candidates", progress: 0.3, totalCandidates: Math.min(record.settings.maxCandidates, manualCandidates.length + searchCandidates.length) });
         const candidates = [...manualCandidates];
         let candidateBytes = candidates.reduce((total, candidate) => total + candidate.bytes.byteLength, 0);
         for (const [index, item] of searchCandidates.entries()) {
-            if (candidates.length >= record.settings.maxCandidates || await this.cancelled(record, owner)) break;
+            if (candidates.length >= record.settings.maxCandidates || await this.cancelled(record, owner, signal)) break;
             try {
                 const downloaded = await downloadPortraitCandidate(item.imageUrl);
                 if (candidateBytes + downloaded.bytes.byteLength > MAX_CANDIDATE_BYTES) {
@@ -151,7 +153,7 @@ export class PortraitTaskRunner {
         record = await this.store.update(record.taskId, owner, { stage: "local-comparing", progress: 0.52, totalCandidates: keptCandidates.length });
         const pairs: PortraitPairResult[] = [];
         for (const [index, candidate] of keptCandidates.entries()) {
-            if (await this.cancelled(record, owner)) return;
+            if (await this.cancelled(record, owner, signal)) return;
             let faces = candidate.faces;
             try { faces ||= await this.faceEngine.analyze(candidate.decoded); } catch (error) {
                 const localPrecheck = buildLocalPrecheck(queryImage, candidate.decoded, queryFaces, undefined, [error instanceof Error ? error.message : "候选人脸特征提取失败"]);
@@ -206,8 +208,8 @@ export class PortraitTaskRunner {
         return decodePortraitImage(await this.readInputBytes(record, owner, inputId));
     }
 
-    private async cancelled(record: PortraitTaskRecord, owner: { keyId: string; origin: string }) {
-        return (await this.store.get(record.taskId, owner)).cancelRequested === true;
+    private async cancelled(record: PortraitTaskRecord, owner: { keyId: string; origin: string }, signal: AbortSignal) {
+        return signal.aborted || (await this.store.get(record.taskId, owner)).cancelRequested === true;
     }
 }
 

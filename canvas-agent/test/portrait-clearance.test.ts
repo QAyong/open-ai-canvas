@@ -11,6 +11,7 @@ import { computePHash, cosineSimilarity, hammingDistance, imageQuality, structur
 import { buildPortraitReports } from "../src/portrait-clearance/reports.js";
 import { downloadPortraitCandidate, validatePublicUrl } from "../src/portrait-clearance/safe-image-download.js";
 import { PortraitTaskStore } from "../src/portrait-clearance/task-store.js";
+import { installPortraitModels } from "../src/portrait-clearance/model-store.js";
 
 test("portrait risk thresholds and cosine similarity are deterministic", () => {
     assert.equal(riskFromFaceSimilarity(undefined), "unable_to_determine");
@@ -202,3 +203,185 @@ test("reports preserve the reference report sections across all export formats",
     assert.doesNotMatch(reports.html, /图片过大，未内嵌/);
     assert.equal(Buffer.from(reports.docx).subarray(0, 2).toString(), "PK");
 });
+
+test("deleting an active portrait task aborts its runner and prevents directory revival", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "portrait-clearance-delete-"));
+    const store = new PortraitTaskStore(root, "runtime-owner");
+    const owner = { keyId: "key-1", origin: "http://127.0.0.1:3000" };
+    const task = await createStoreTask(store, owner, "portrait-delete-0001");
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+    store.start(task.taskId, async (_record, signal) => {
+        started();
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        await store.update(task.taskId, owner, { status: "failed", stage: "done" }).catch(() => undefined);
+    });
+    try {
+        await startedPromise;
+        await store.delete(task.taskId, owner);
+        await assert.rejects(() => store.get(task.taskId, owner), { code: "portrait_task_not_found" });
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        assert.equal((await store.recoverableRecords()).some((record) => record.taskId === task.taskId), false);
+    } finally {
+        await fs.rm(root, { recursive: true, force: true });
+    }
+});
+
+test("a cancelled portrait task cannot be overwritten by a late failure", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "portrait-clearance-cancel-"));
+    const store = new PortraitTaskStore(root, "runtime-owner");
+    const owner = { keyId: "key-1", origin: "http://127.0.0.1:3000" };
+    const task = await createStoreTask(store, owner, "portrait-cancel-0001");
+    try {
+        await store.requestCancel(task.taskId, owner);
+        const late = await store.update(task.taskId, owner, { status: "failed", stage: "done", errorCode: "late_failure" });
+        assert.equal(late.status, "cancelled");
+        assert.equal((await store.get(task.taskId, owner)).status, "cancelled");
+    } finally {
+        await fs.rm(root, { recursive: true, force: true });
+    }
+});
+
+test("retry waits for the cancelled portrait runner before resetting durable state", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "portrait-clearance-retry-"));
+    const store = new PortraitTaskStore(root, "runtime-owner");
+    const owner = { keyId: "key-1", origin: "http://127.0.0.1:3000" };
+    const task = await createStoreTask(store, owner, "portrait-retry-0001");
+    let runnerExited = false;
+    let started!: () => void;
+    const startedPromise = new Promise<void>((resolve) => { started = resolve; });
+    store.start(task.taskId, async (_record, signal) => {
+        started();
+        await new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }));
+        await new Promise((resolve) => setTimeout(resolve, 15));
+        runnerExited = true;
+    });
+    try {
+        await startedPromise;
+        await store.requestCancel(task.taskId, owner);
+        const retried = await store.prepareRetry(task.taskId, owner);
+        assert.equal(runnerExited, true);
+        assert.equal(store.isRunning(task.taskId), false);
+        assert.equal(retried.status, "queued");
+        assert.equal(retried.cancelRequested, false);
+    } finally {
+        await fs.rm(root, { recursive: true, force: true });
+    }
+});
+
+test("concurrent portrait model claims lease a job only once", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "portrait-clearance-claim-"));
+    const store = new PortraitTaskStore(root, "runtime-owner");
+    const owner = { keyId: "key-1", origin: "http://127.0.0.1:3000" };
+    const task = await prepareModelJobTask(store, owner, "portrait-claim-0001");
+    try {
+        const claims = await Promise.all([store.claimModelJob(task.taskId, owner), store.claimModelJob(task.taskId, owner)]);
+        assert.equal(claims.filter(Boolean).length, 1);
+        assert.equal(new Set(claims.filter(Boolean).map((job) => job!.leaseToken)).size, 1);
+    } finally {
+        await fs.rm(root, { recursive: true, force: true });
+    }
+});
+
+test("concurrent portrait model completion and failure cannot overwrite one another", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "portrait-clearance-model-race-"));
+    const store = new PortraitTaskStore(root, "runtime-owner");
+    const owner = { keyId: "key-1", origin: "http://127.0.0.1:3000" };
+    const task = await prepareModelJobTask(store, owner, "portrait-model-race-0001");
+    try {
+        const job = await store.claimModelJob(task.taskId, owner);
+        assert.ok(job?.leaseToken);
+        const settled = await Promise.allSettled([
+            store.completeModelJob(task.taskId, owner, job.jobId, { attempt: job.attempt, leaseToken: job.leaseToken, visionComparison: modelVisionResult() }),
+            store.failModelJob(task.taskId, owner, job.jobId, { attempt: job.attempt, leaseToken: job.leaseToken, errorCode: "model_failed", errorMessage: "模型失败", retryable: false }),
+        ]);
+        assert.equal(settled.filter((item) => item.status === "fulfilled").length, 1);
+        assert.equal(settled.filter((item) => item.status === "rejected").length, 1);
+        const persisted = await store.get(task.taskId, owner);
+        assert.ok(persisted.modelJobs?.[0]?.status === "completed" || persisted.modelJobs?.[0]?.status === "failed");
+    } finally {
+        await fs.rm(root, { recursive: true, force: true });
+    }
+});
+
+test("concurrent portrait model installs share one in-flight download", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "portrait-clearance-install-"));
+    let fetchCount = 0;
+    const fetchImpl = async () => {
+        fetchCount += 1;
+        return new Response("unavailable", { status: 503 });
+    };
+    try {
+        const settled = await Promise.allSettled([
+            installPortraitModels(root, { fetch: fetchImpl as typeof fetch }),
+            installPortraitModels(root, { fetch: fetchImpl as typeof fetch }),
+        ]);
+        assert.equal(settled.every((item) => item.status === "rejected"), true);
+        assert.equal(fetchCount, 1);
+    } finally {
+        await fs.rm(root, { recursive: true, force: true });
+    }
+});
+
+test("a new portrait task store discovers unfinished tasks after restart", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "portrait-clearance-recovery-"));
+    const owner = { keyId: "key-1", origin: "http://127.0.0.1:3000" };
+    const first = new PortraitTaskStore(root, "runtime-owner");
+    const task = await createStoreTask(first, owner, "portrait-recover-0001");
+    try {
+        await first.update(task.taskId, owner, { status: "running", stage: "local-comparing" });
+        const restarted = new PortraitTaskStore(root, "runtime-owner");
+        assert.deepEqual((await restarted.recoverableRecords()).map((record) => record.taskId), [task.taskId]);
+    } finally {
+        await fs.rm(root, { recursive: true, force: true });
+    }
+});
+
+async function createStoreTask(store: PortraitTaskStore, owner: { keyId: string; origin: string }, clientOperationId: string) {
+    const input = "data:image/png;base64,iVBORw0KGgo=";
+    return (await store.create({
+        schemaVersion: 1,
+        clientOperationId,
+        ownerScopeHash: "a".repeat(64),
+        projectId: "project-1",
+        nodeId: "node-1",
+        mode: "direct-compare",
+        analysisMode: "local-plus-vision",
+        inputs: [
+            { nodeId: "query", role: "query", fileName: "query.png", mimeType: "image/png", dataUrl: input },
+            { nodeId: "reference", role: "reference", fileName: "reference.png", mimeType: "image/png", dataUrl: input },
+        ],
+        settings: { maxCandidates: 30, searchScrolls: 5, dedupMode: "phash", modelConcurrency: 2, showBrowserForDebug: false },
+    }, owner)).record;
+}
+
+async function prepareModelJobTask(store: PortraitTaskStore, owner: { keyId: string; origin: string }, clientOperationId: string) {
+    const task = await createStoreTask(store, owner, clientOperationId);
+    await store.writeResult(task.taskId, owner, {
+        schemaVersion: 1,
+        taskId: task.taskId,
+        mode: "direct-compare",
+        queryImageId: "input-1",
+        highestRisk: "low",
+        riskCounts: { low: 1 },
+        candidateCount: 1,
+        comparedCount: 1,
+        candidates: [{ id: "input-2", originalRank: 1, title: "reference.png", imageArtifactId: "input-2", source: "connected", byteSize: 8, resultId: "pair-1" }],
+        pairs: [{ id: "pair-1", queryImageId: "input-1", comparisonImageId: "input-2", source: "connected-reference", status: "partial", riskLevel: "low", overallSimilarity: 0.2, analysisPath: "A", localPrecheck: localPrecheck(), basis: ["本地预检"], limitations: [] }],
+        limitations: [],
+        createdAt: task.createdAt,
+    });
+    await store.update(task.taskId, owner, { status: "waiting_model", stage: "waiting-for-model", detailsAvailable: true });
+    await store.ensureModelJobs(task.taskId, owner);
+    return task;
+}
+
+function localPrecheck() {
+    const quality = { width: 32, height: 32, sharpness: 1, brightness: 128, contrast: 1, grade: "usable" as const };
+    return { qualityA: quality, qualityB: quality, facesA: 1, facesB: 1, faceSimilarity: 0.2, ssim: 0.5, colorHistogramCorrelation: 0.5, canExtractEmbedding: true, reliabilityIssues: [] };
+}
+
+function modelVisionResult() {
+    const feature = { similarity: "low" as const, note: "差异明显" };
+    return { imageAType: "realistic" as const, imageBType: "realistic" as const, analysisPath: "A" as const, status: "success" as const, riskLevel: "low" as const, overallSimilarity: 0.2, featureComparison: { face_shape: feature, facial_layout: feature, eyes_brows: feature, nose_mouth: feature, hair_hairline: feature, distinctive_features: feature }, basis: ["差异明显"], limitations: [], modificationSuggestions: [], insightfaceFusionNote: "本地结果仅作辅助", manualReviewRecommended: false };
+}
