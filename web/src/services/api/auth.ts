@@ -1,10 +1,11 @@
 import type { ModelChannel } from "@/stores/use-config-store";
-import type { CreditLedgerEntry } from "@/services/api/wallet";
+import type { BillingOrder, CreditLedgerEntry } from "@/services/api/wallet";
 import type { GenerationTask, TaskStatus } from "@/services/api/task-center";
 import type { CanvasDrawingEngineSetting } from "@/lib/canvas/canvas-drawing-engine";
 import type { FeatureAvailability } from "@/stores/use-user-store";
 import { apiClient, request } from "@/services/api/request";
 import type { PublicLogicalModel } from "@/services/api/logical-models";
+import type { OSSConnectionTestInput, OSSConnectionTestResult, OSSProvider, S3Preset } from "@/lib/oss-settings";
 
 const api = apiClient;
 
@@ -59,6 +60,10 @@ export type ApiCallLog = {
     channelName: string;
     taskId?: string;
     taskStatus?: TaskStatus;
+    billingOrderId?: string;
+    billingStatus?: BillingOrder["status"];
+    billingAmountMicrocredits: number;
+    billingAvailable: boolean;
     source: string;
     capability: "text" | "image" | "video" | "audio" | "";
     operation?: string;
@@ -119,8 +124,15 @@ export type AdminUserDetail = {
     account: { userId: string; availableMicrocredits: number; reservedMicrocredits: number; version: number };
     counts: { ledgerEntries: number; tasks: number; apiCalls: number; auditEvents: number };
     storageUsage: {
-        assetCount: number; assetBytes: number; canvasCount: number; canvasBytes: number;
-        sessionCount: number; sessionBytes: number; taskCount: number; taskBytes: number; apiCallCount: number;
+        assetCount: number;
+        assetBytes: number;
+        canvasCount: number;
+        canvasBytes: number;
+        sessionCount: number;
+        sessionBytes: number;
+        taskCount: number;
+        taskBytes: number;
+        apiCallCount: number;
     };
     storedFileBytes: number;
     dailyUploadBytes: number;
@@ -257,7 +269,8 @@ export type UserPromptPreference = {
 
 export type AdminOSSSetting = {
     enabled: boolean;
-    provider: "aliyun" | "tencent" | "qiniu";
+    provider: OSSProvider;
+    s3Preset: S3Preset;
     region: string;
     endpoint: string;
     cdnBaseUrl: string;
@@ -265,8 +278,16 @@ export type AdminOSSSetting = {
     accessKeyId: string;
     accessKeySecret?: string;
     hasAccessKeySecret: boolean;
+    sessionToken?: string;
+    hasSessionToken: boolean;
+    pathStyle: boolean;
+    allowUserS3: boolean;
     publicBaseUrl: string;
     pathPrefix: string;
+    testedAt?: string;
+    testedDigest?: string;
+    historyCount?: number;
+    referencedResourceCount?: number;
     updatedBy?: string;
     createdAt?: string;
     updatedAt?: string;
@@ -344,7 +365,6 @@ export type RuntimePolicySetting = {
     createdAt?: string;
     updatedAt?: string;
 };
-
 
 export function getAuthSettings() {
     return request<{ firstUser: boolean; registrationEnabled: boolean; linuxdoEnabled: boolean; emailEnabled: boolean; emailCodeRequired: boolean }>(api.get("/auth/settings"));
@@ -499,6 +519,10 @@ export function getAdminOSSSetting() {
 
 export function updateAdminOSSSetting(input: Partial<AdminOSSSetting>) {
     return request<{ setting: AdminOSSSetting }>(api.patch("/admin/settings/oss", input));
+}
+
+export function testAdminOSSConnection(input: OSSConnectionTestInput) {
+    return request<OSSConnectionTestResult>(api.post("/admin/settings/oss/test", input));
 }
 
 export function getAdminArkPrivateAssetSetting() {

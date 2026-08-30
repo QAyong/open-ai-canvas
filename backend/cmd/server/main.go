@@ -56,6 +56,9 @@ func main() {
 	if err := svc.EnsureBuiltinSkills(); err != nil {
 		log.Fatal(err)
 	}
+	if err := svc.EnsureSkillPackages(); err != nil {
+		log.Fatal(err)
+	}
 	if summary, err := svc.MigrateLegacyStorage(); err != nil {
 		log.Printf("storage migration skipped after error: %v", err)
 	} else if summary.Backup != "" {
@@ -84,6 +87,7 @@ func main() {
 	handler.RegisterResponseInterceptionRoutes(api, svc)
 	handler.RegisterAdminRoutes(api, svc)
 	handler.RegisterAdminAnalyticsRoutes(api, svc)
+	handler.RegisterAdminStorageRoutes(api, svc)
 	handler.RegisterAnnouncementRoutes(api, svc)
 	handler.RegisterFinanceRoutes(api, svc)
 	handler.RegisterLibTVRoutes(api, svc)

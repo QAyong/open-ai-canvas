@@ -37,9 +37,11 @@ const (
 )
 
 type MediaReference struct {
+	ID        string `json:"id,omitempty"`
 	URL       string `json:"url,omitempty"`
 	DataURL   string `json:"dataUrl,omitempty"`
 	Kind      string `json:"kind,omitempty"`
+	Role      string `json:"role,omitempty"`
 	Ephemeral bool   `json:"ephemeral,omitempty"`
 }
 
@@ -78,6 +80,7 @@ type PollContext struct {
 type RequestSpec struct {
 	Method      string            `json:"method"`
 	Path        string            `json:"path"`
+	OriginPath  bool              `json:"originPath,omitempty"`
 	ContentType string            `json:"contentType"`
 	Headers     map[string]string `json:"headers,omitempty"`
 	Body        any               `json:"body,omitempty"`

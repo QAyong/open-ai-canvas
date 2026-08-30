@@ -30,7 +30,12 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 	logicalModelID := strings.TrimSpace(req.LogicalModelID)
 	workflowProviderTask := taskInputUsesWorkflowProvider(normalizedInput)
 	frontendEnabled := false
-	if !workflowProviderTask {
+	if workflowProviderTask {
+		config, _ := normalizedInput["config"].(map[string]any)
+		if err := s.RequireWorkflowPluginForUser(userID, strings.TrimSpace(fmt.Sprint(config["interfaceType"]))); err != nil {
+			return nil, err
+		}
+	} else {
 		// 工作流是独立执行器；普通模型仍严格使用主线的目录和路由校验。
 		frontendEnabled, err = s.FeatureEnabled(FeatureFrontendModels)
 		if err != nil {
@@ -39,29 +44,9 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 	}
 
 	if !workflowProviderTask {
-		if frontendEnabled {
-			// 前台模型模式：必须有 logicalModelId
-			if logicalModelID == "" {
-				return nil, InvalidModelSelection("前台模型模式下必须指定 logicalModelId")
-			}
-			intent := ModelRequestIntentFromTaskInput(normalizedInput, taskType, req.Operation)
-			routed, err = s.ResolveLogicalModel(logicalModelID, intent)
-			if err != nil {
-				return nil, err
-			}
-			normalizedInput = applyRoutedProviderSelection(normalizedInput, routed)
-		} else {
-			// 系统渠道模型模式：禁止 logicalModelId
-			if logicalModelID != "" {
-				return nil, ModelCatalogMismatch("模型目录已更新，请重新选择")
-			}
-			// 自定义渠道没有系统 channelId；它会在后续由自定义渠道功能开关、
-			// 能力校验和 provider 配置校验共同处理，不能误报为“缺少系统渠道”。
-			if !taskInputUsesCustomChannel(normalizedInput) {
-				if err := s.validateSystemChannelModelSelection(normalizedInput); err != nil {
-					return nil, err
-				}
-			}
+		routed, normalizedInput, err = s.resolveTaskModelSelection(normalizedInput, logicalModelID, taskType, req.Operation, frontendEnabled)
+		if err != nil {
+			return nil, err
 		}
 	}
 
@@ -139,6 +124,36 @@ func (s *Service) CreateTask(userID string, req CreateTaskRequest) (*model.Task,
 	s.recordActivity(userID, "task", 1)
 	_ = s.log(userID, task.ID, "info", "任务已进入队列", "")
 	return taskForOutput(task), nil
+}
+
+// resolveTaskModelSelection 根据请求实际携带的模型选择决定路由方式。
+// 显式系统渠道和用户自定义渠道请求不能被全局前台模型开关误判；
+// 它们仍分别进入系统目录校验或自定义渠道的功能、能力与安全校验。
+func (s *Service) resolveTaskModelSelection(input map[string]any, logicalModelID string, taskType string, operation string, frontendEnabled bool) (*RoutedModel, map[string]any, error) {
+	customChannelTask := taskInputUsesCustomChannel(input)
+	if frontendEnabled && !taskInputUsesSystemChannel(input) && !customChannelTask {
+		if logicalModelID == "" {
+			return nil, input, InvalidModelSelection("前台模型模式下必须指定 logicalModelId")
+		}
+		intent := ModelRequestIntentFromTaskInput(input, taskType, operation)
+		routed, err := s.ResolveLogicalModel(logicalModelID, intent)
+		if err != nil {
+			return nil, input, err
+		}
+		return routed, applyRoutedProviderSelection(input, routed), nil
+	}
+
+	if logicalModelID != "" {
+		return nil, input, ModelCatalogMismatch("模型目录已更新，请重新选择")
+	}
+	// 自定义渠道没有系统 channelId；它会在后续由自定义渠道功能开关、
+	// 能力校验和 provider 配置校验共同处理，不能误报为“缺少系统渠道”。
+	if !customChannelTask {
+		if err := s.validateSystemChannelModelSelection(input); err != nil {
+			return nil, input, err
+		}
+	}
+	return nil, input, nil
 }
 
 func applyRoutedProviderSelection(input map[string]any, routed *RoutedModel) map[string]any {
@@ -324,6 +339,15 @@ func taskInputUsesCustomChannel(input map[string]any) bool {
 		return false
 	}
 	return strings.TrimSpace(baseURL) != "" && strings.TrimSpace(apiKey) != ""
+}
+
+func taskInputUsesSystemChannel(input map[string]any) bool {
+	config, ok := input["config"].(map[string]any)
+	if !ok {
+		return false
+	}
+	channelID, _ := config["channelId"].(string)
+	return strings.TrimSpace(channelID) != ""
 }
 
 func taskInputUsesWorkflowProvider(input map[string]any) bool {
