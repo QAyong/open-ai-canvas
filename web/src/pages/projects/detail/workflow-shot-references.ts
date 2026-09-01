@@ -1,6 +1,7 @@
 import type { CanvasResourceReference } from "@/lib/canvas/canvas-resource-references";
+import { assetCategoryLabel, normalizeAssetCategory } from "@/lib/asset-category";
 import { resourceFileUrl, resourceIdFromStorageKey, resourceStorageKey } from "@/services/api/resources";
-import type { ProjectAsset, ProjectDetail } from "@/services/api/projects";
+import type { CharacterRepresentation, ProjectAsset, ProjectDetail, ShotAssetReference } from "@/services/api/projects";
 import type { AssetCategory } from "@/stores/use-asset-store";
 import type { ReferenceImage } from "@/types/image";
 import type { ReferenceAudio } from "@/types/media";
@@ -20,21 +21,20 @@ export type ShotPromptAssetReference = {
     imageIndex: number;
     audioIndex?: number;
     voiceDescription?: string;
+    dialogue?: string;
 };
-
-const assetCategories = new Set<AssetCategory>(["character", "environment", "wardrobe", "prop", "weapon", "style", "other"]);
 
 export function buildShotAssetReferenceContext(detail: ProjectDetail, shotId: string): ShotAssetReferenceContext {
     const assetByVersionId = new Map(detail.assets.filter((asset) => asset.primaryVersionId).map((asset) => [asset.primaryVersionId as string, asset]));
     const seenAssetIds = new Set<string>();
     const entries = (detail.shotReferences || []).flatMap((reference) => {
         if (reference.shotId !== shotId || reference.status !== "linked") return [];
-        const asset = assetByVersionId.get(reference.assetVersionId);
+        const asset = reference.asset || assetByVersionId.get(reference.assetVersionId);
         if (!asset || seenAssetIds.has(asset.id)) return [];
-        const image = projectAssetReferenceImage(asset);
+        const image = projectAssetReferenceImage(asset, reference);
         if (!image) return [];
         seenAssetIds.add(asset.id);
-        return [{ asset, image }];
+        return [{ asset, image, reference }];
     });
 
     const referenceAudios: ReferenceAudio[] = [];
@@ -82,11 +82,11 @@ export function buildShotAssetReferenceContext(detail: ProjectDetail, shotId: st
         referenceImages: entries.map(({ image }) => image),
         referenceAudios,
         assetReferences,
-        resolvedCharacterVersions: entries.flatMap(({ asset }) => asset.character?.versionId ? [{ assetId: asset.id, versionId: asset.character.versionId }] : []),
+        resolvedCharacterVersions: entries.flatMap(({ asset, reference }) => asset.character ? [{ assetId: asset.id, versionId: reference.referencedVersion?.id || reference.assetVersionId || asset.character.versionId }] : []),
     };
 }
 
-export function resolveShotAssetMentionPrompt(prompt: string, context: ShotAssetReferenceContext) {
+export function resolveShotAssetMentionPrompt(prompt: string, context: ShotAssetReferenceContext, options: { dialogue?: string } = {}) {
     const imageLabelByAssetId = new Map(context.mentionReferences.map((reference, index) => [reference.assetId, `图片${index + 1}`]));
     const unresolved = new Set<string>();
     const resolved = prompt.replace(/@\[asset:([^\]]+)\]/g, (token, assetId: string) => {
@@ -98,8 +98,24 @@ export function resolveShotAssetMentionPrompt(prompt: string, context: ShotAsset
         return label;
     });
     if (unresolved.size) throw new Error(`提示词中的 ${Array.from(unresolved).join("、")} 未绑定到当前镜头，请重新选择资产或删除引用`);
-    const assetBlock = compileShotAssetReferencePrompt(context.assetReferences);
-    return [resolved.trim(), assetBlock].filter(Boolean).join("\n\n");
+    const dialogueContext = withShotDialogue(context.assetReferences, options.dialogue);
+    const assetBlock = compileShotAssetReferencePrompt(dialogueContext.references);
+    const dialogueBlock = dialogueContext.unassignedDialogue ? `【镜头台词】\n\n${dialogueContext.unassignedDialogue}` : "";
+    return [resolved.trim(), assetBlock, dialogueBlock].filter(Boolean).join("\n\n");
+}
+
+export function ensureShotAssetMentionPrompt(prompt: string, references: Array<Pick<CanvasResourceReference, "assetId" | "kind" | "label" | "title">>) {
+    const value = prompt.trim();
+    if (!value) return "";
+    const mentionedAssetIds = new Set(Array.from(value.matchAll(/@\[asset:([^\]]+)\]/g), (match) => match[1]));
+    const missing = references.filter((reference): reference is typeof reference & { assetId: string } => Boolean(reference.assetId && !mentionedAssetIds.has(reference.assetId)));
+    if (!missing.length) return value;
+    const block = (title: string, items: typeof missing) => items.length
+        ? [title, ...items.map((reference) => `${reference.title || reference.label}：@[asset:${reference.assetId}]`)].join("\n")
+        : "";
+    const characters = missing.filter((reference) => reference.kind === "character");
+    const otherAssets = missing.filter((reference) => reference.kind !== "character");
+    return [value, block("【角色参考】", characters), block("【场景与道具参考】", otherAssets)].filter(Boolean).join("\n\n");
 }
 
 export function compileShotAssetReferencePrompt(references: ShotPromptAssetReference[]) {
@@ -109,18 +125,17 @@ export function compileShotAssetReferencePrompt(references: ShotPromptAssetRefer
         const media = [`${visualLabel}：图片${reference.imageIndex}`, reference.audioIndex ? `声音参考：音频${reference.audioIndex}` : ""].filter(Boolean).join("；");
         return [
             `- ${reference.title}：${media}`,
-            reference.voiceDescription ? `  声音说明：${reference.voiceDescription}` : "",
+            reference.voiceDescription ? `  声音画像：${reference.voiceDescription}` : "",
+            reference.dialogue ? `  镜头台词：${reference.dialogue}` : "",
         ].filter(Boolean);
     });
     return ["【资产参考】", "", ...lines].join("\n");
 }
 
-function projectAssetReferenceImage(asset: ProjectAsset): ReferenceImage | undefined {
-    const representation = asset.character
-        ? asset.character.representations.find((item) => item.role === "turnaround_sheet")
-            || asset.character.representations.find((item) => item.role === "primary")
-            || asset.character.representations.find((item) => item.role === "front")
-        : undefined;
+function projectAssetReferenceImage(asset: ProjectAsset, reference?: ShotAssetReference): ReferenceImage | undefined {
+    const boundRepresentations = reference?.referencedVersion?.representations || [];
+    const representation = preferredVisualRepresentation(boundRepresentations)
+        || (asset.character ? preferredVisualRepresentation(asset.character.representations) : undefined);
     if (representation) {
         return {
             id: asset.id,
@@ -143,12 +158,46 @@ function projectAssetReferenceImage(asset: ProjectAsset): ReferenceImage | undef
     };
 }
 
+function preferredVisualRepresentation(representations: CharacterRepresentation[]) {
+    return representations.find((item) => item.role === "turnaround_sheet")
+        || representations.find((item) => item.role === "primary")
+        || representations.find((item) => item.role === "front")
+        || representations.find((item) => item.mediaType.startsWith("image"));
+}
+
+function withShotDialogue(references: ShotPromptAssetReference[], dialogue?: string) {
+    const value = stringValue(dialogue);
+    if (!value) return { references, unassignedDialogue: "" };
+    const characters = references.filter((reference) => reference.category === "character");
+    if (characters.length === 1) {
+        return {
+            references: references.map((reference) => reference.assetId === characters[0]?.assetId ? { ...reference, dialogue: value } : reference),
+            unassignedDialogue: "",
+        };
+    }
+    const resolved = references.map((reference) => {
+        if (reference.category !== "character") return reference;
+        const matched = dialogueForCharacter(value, reference.title);
+        return matched ? { ...reference, dialogue: matched } : reference;
+    });
+    return {
+        references: resolved,
+        unassignedDialogue: resolved.some((reference) => reference.dialogue) ? "" : value,
+    };
+}
+
+function dialogueForCharacter(dialogue: string, characterName: string) {
+    const escaped = characterName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const pattern = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*[：:]\\s*([^\\n]+)`, "g");
+    return Array.from(dialogue.matchAll(pattern), (match) => match[1]?.trim()).filter(Boolean).join("；");
+}
+
 function projectAssetCategory(value: string): AssetCategory {
-    return assetCategories.has(value as AssetCategory) ? value as AssetCategory : "other";
+    return normalizeAssetCategory(value);
 }
 
 function projectAssetCategoryLabel(value: string) {
-    return ({ environment: "场景", wardrobe: "服装", prop: "道具", weapon: "武器", style: "风格", other: "资产" } as Record<string, string>)[value] || "资产";
+    return assetCategoryLabel(value);
 }
 
 function characterVoiceDescription(asset: ProjectAsset) {

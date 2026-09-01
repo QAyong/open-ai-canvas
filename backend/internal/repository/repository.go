@@ -26,6 +26,8 @@ var ErrTextReplayQuotaExceeded = errors.New("text replay quota exceeded")
 
 var ErrTextReplayClosed = errors.New("text replay task is closed")
 
+var ErrEmailVerificationCodeInvalid = errors.New("email verification code is no longer valid")
+
 var ErrProjectAssetFolderNotEmpty = errors.New("project asset folder is not empty")
 
 var ErrProjectHasActiveTasks = errors.New("project has active tasks")
@@ -54,6 +56,12 @@ func New(db *gorm.DB) *Repository {
 
 func (r *Repository) Dialect() string {
 	return r.db.Dialector.Name()
+}
+
+func (r *Repository) ReleaseTaskLease(id string, owner string) error {
+	return r.db.Model(&model.Task{}).
+		Where("id = ? AND status = ? AND lease_owner = ?", id, model.TaskStatusRunning, owner).
+		Updates(map[string]any{"lease_owner": "", "lease_expires_at": nil, "updated_at": time.Now()}).Error
 }
 
 // NextPrefixedID 在数据库事务中递增序列，避免 UUID/父子字符串拼接导致的不可读和不可排序 ID。
@@ -298,6 +306,36 @@ func (r *Repository) CreateUserWithEmailVerification(user *model.User, verificat
 			return errors.New("email verification code is no longer valid")
 		}
 		return tx.Create(user).Error
+	})
+}
+
+func (r *Repository) ResetUserPasswordWithEmailVerification(userID string, email string, purpose string, verificationCodeID string, passwordHash string, usedAt time.Time) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		codeResult := tx.Model(&model.EmailVerificationCode{}).
+			Where("id = ? AND email = ? AND purpose = ? AND used_at IS NULL AND expires_at > ?", verificationCodeID, email, purpose, usedAt).
+			Update("used_at", usedAt)
+		if codeResult.Error != nil {
+			return codeResult.Error
+		}
+		if codeResult.RowsAffected != 1 {
+			return ErrEmailVerificationCodeInvalid
+		}
+
+		userResult := tx.Model(&model.User{}).
+			Where("id = ? AND email <> '' AND lower(email) = lower(?) AND status = ? AND password_hash <> ''", userID, email, model.UserStatusActive).
+			Updates(map[string]any{"password_hash": passwordHash, "updated_at": usedAt})
+		if userResult.Error != nil {
+			return userResult.Error
+		}
+		if userResult.RowsAffected != 1 {
+			return ErrEmailVerificationCodeInvalid
+		}
+		if err := tx.Delete(&model.AuthSession{}, "user_id = ?", userID).Error; err != nil {
+			return err
+		}
+		return tx.Model(&model.EmailVerificationCode{}).
+			Where("email = ? AND purpose = ? AND used_at IS NULL", email, purpose).
+			Update("used_at", usedAt).Error
 	})
 }
 
@@ -729,7 +767,7 @@ func (r *Repository) AdminSystemChannels(keyword string, status string, limit in
 
 func (r *Repository) AdminSystemChannelReferences() ([]model.ModelChannel, error) {
 	var channels []model.ModelChannel
-	err := r.db.Select("id", "name").Where("scope = ?", model.ChannelScopeSystem).Order("created_at asc").Find(&channels).Error
+	err := r.db.Select("id", "name", "enabled").Where("scope = ?", model.ChannelScopeSystem).Order("created_at asc").Find(&channels).Error
 	return channels, err
 }
 
@@ -971,6 +1009,21 @@ func (r *Repository) SaveResource(resource *model.Resource) error {
 	return r.db.Save(resource).Error
 }
 
+func (r *Repository) ResourceByUploadKey(userID string, uploadKey string) (*model.Resource, error) {
+	var resource model.Resource
+	if err := r.db.First(&resource, "user_id = ? AND upload_key = ?", userID, uploadKey).Error; err != nil {
+		return nil, err
+	}
+	return &resource, nil
+}
+
+func (r *Repository) ClaimFailedResourceUpload(userID string, id string) (bool, error) {
+	result := r.db.Model(&model.Resource{}).
+		Where("id = ? AND user_id = ? AND status = ?", id, userID, model.ResourceStatusFailed).
+		Updates(map[string]any{"status": model.ResourceStatusPending, "error": "", "updated_at": time.Now()})
+	return result.RowsAffected == 1, result.Error
+}
+
 func (r *Repository) DeleteResource(userID string, id string) error {
 	return r.db.Delete(&model.Resource{}, "id = ? AND user_id = ?", id, userID).Error
 }
@@ -1032,6 +1085,18 @@ func (r *Repository) UpsertAsset(asset *model.Asset) error {
 
 func (r *Repository) DeleteAsset(userID string, id string) error {
 	return r.DeleteAssetAndResources(userID, id, nil, nil)
+}
+
+func (r *Repository) FindExpiredArchivedAssets(cutoff time.Time, limit int) ([]model.Asset, error) {
+	var assets []model.Asset
+	if limit <= 0 {
+		limit = 100
+	}
+	err := r.db.Where("status = ? AND updated_at <= ?", model.AssetVersionStatusArchived, cutoff).
+		Order("updated_at asc, id asc").
+		Limit(limit).
+		Find(&assets).Error
+	return assets, err
 }
 
 func (r *Repository) ReplaceAssets(userID string, assets []model.Asset) error {
@@ -2001,6 +2066,11 @@ func (r *Repository) CreateProjectAssetCandidates(candidates []model.ProjectAsse
 		return nil
 	}
 	return r.db.Create(&candidates).Error
+}
+
+func (r *Repository) CreateProjectAssetCandidate(candidate *model.ProjectAssetCandidate) (bool, error) {
+	result := r.db.Clauses(clause.OnConflict{DoNothing: true}).Create(candidate)
+	return result.RowsAffected == 1, result.Error
 }
 
 // ConfirmProjectAssetCandidate 将正式资产身份、首版本、项目引用和候选状态放在同一事务中，避免出现半确认数据。

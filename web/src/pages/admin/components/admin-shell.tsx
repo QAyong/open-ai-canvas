@@ -22,6 +22,7 @@ import {
     Paintbrush,
     PlugZap,
     RadioTower,
+    RefreshCw,
     Settings2,
     ShieldAlert,
     ShieldCheck,
@@ -87,6 +88,7 @@ const adminNavigation: Array<{ label: string; items: AdminNavigationItem[] }> = 
             { path: "/admin/settings/ark-private-assets", label: "方舟素材库", description: "Seedance 可信参考素材", icon: <CloudUpload className="size-4" /> },
             { path: "/admin/settings/response-interception", label: "模型响应拦截", description: "先启用策略，再配置替换规则", icon: <ShieldAlert className="size-4" /> },
             { path: "/admin/settings/third-party", label: "第三方参数配置", description: "先配置凭据，再开放用户入口", icon: <KeyRound className="size-4" /> },
+            { path: "/admin/settings/system-update", label: "系统更新", description: "检查版本、备份与安全更新", icon: <RefreshCw className="size-4" /> },
         ],
     },
 ];
@@ -142,7 +144,7 @@ export function AdminShell() {
                     <div className="admin-sidebar-footer shrink-0">
                         <Tooltip mouseEnterDelay={0.1} title={collapsed ? "返回创作台" : undefined} placement="right" rootClassName="app-workspace-sidebar-tooltip">
                             <NavLink
-                                to="/home"
+                                to="/"
                                 aria-label={collapsed ? "返回创作台" : undefined}
                                 className={cn("app-workspace-nav-link group flex h-8 items-center text-foreground/62 transition-colors hover:bg-surface-hover hover:text-foreground", collapsed ? "justify-center px-0" : "gap-2.5 px-2.5")}
                             >
@@ -258,7 +260,7 @@ function MobileAdminNavigation() {
             </Dropdown>
             <div className="flex shrink-0 items-center gap-1">
                 <Tooltip title="返回创作台">
-                    <Link to="/home" className="admin-mobile-navigation-action" aria-label="返回创作台">
+                    <Link to="/" className="admin-mobile-navigation-action" aria-label="返回创作台">
                         <Home className="size-4" aria-hidden="true" />
                     </Link>
                 </Tooltip>

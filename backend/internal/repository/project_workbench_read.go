@@ -109,6 +109,27 @@ func (r *Repository) ProjectUnitShotAssetReferences(projectID string, unitID str
 	return references, err
 }
 
+func (r *Repository) ProjectAssetVersionsByIDs(projectID string, versionIDs []string) ([]model.AssetVersion, error) {
+	if len(versionIDs) == 0 {
+		return []model.AssetVersion{}, nil
+	}
+	var versions []model.AssetVersion
+	err := r.db.Table("asset_versions").Select("asset_versions.*").
+		Joins("JOIN project_asset_links ON project_asset_links.asset_id = asset_versions.asset_id").
+		Where("project_asset_links.project_id = ? AND asset_versions.id IN ?", projectID, versionIDs).
+		Find(&versions).Error
+	return versions, err
+}
+
+func (r *Repository) AssetRepresentationsByVersionIDs(versionIDs []string) ([]model.AssetRepresentation, error) {
+	if len(versionIDs) == 0 {
+		return []model.AssetRepresentation{}, nil
+	}
+	var representations []model.AssetRepresentation
+	err := r.db.Where("asset_version_id IN ?", versionIDs).Order("asset_version_id asc, role asc, created_at asc").Find(&representations).Error
+	return representations, err
+}
+
 func (r *Repository) ProjectUnitAssetCandidates(projectID string, unitID string) ([]model.ProjectAssetCandidate, error) {
 	var candidates []model.ProjectAssetCandidate
 	err := r.db.Where("project_id = ? AND (unit_id = ? OR unit_id = '')", projectID, unitID).Order("created_at asc").Find(&candidates).Error
@@ -154,7 +175,7 @@ func (r *Repository) ProjectCanvasUnitLinksForCanvases(projectID string, canvasI
 	return links, err
 }
 
-func (r *Repository) ProjectAssetCandidatesPage(projectID string, page int, pageSize int, unitID string, status string, category string) ([]model.ProjectAssetCandidate, int64, error) {
+func (r *Repository) ProjectAssetCandidatesPage(projectID string, page int, pageSize int, unitID string, status string, category string, queryText string) ([]model.ProjectAssetCandidate, int64, error) {
 	var candidates []model.ProjectAssetCandidate
 	var total int64
 	query := r.db.Model(&model.ProjectAssetCandidate{}).Where("project_id = ?", projectID)
@@ -166,6 +187,9 @@ func (r *Repository) ProjectAssetCandidatesPage(projectID string, page int, page
 	}
 	if value := strings.TrimSpace(category); value != "" {
 		query = query.Where("category = ?", value)
+	}
+	if value := strings.TrimSpace(queryText); value != "" {
+		query = query.Where("LOWER(name) LIKE ?", "%"+strings.ToLower(value)+"%")
 	}
 	if err := query.Count(&total).Error; err != nil {
 		return nil, 0, err

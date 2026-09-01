@@ -49,6 +49,7 @@ export type RuntimeLimits = {
     activeTaskLimit: number;
     resourceUploadMB: number;
     sessionUploadMB: number;
+    recycleBinRetentionDays?: number;
 };
 
 export type ApiCallLog = {
@@ -161,7 +162,7 @@ export type AnalyticsFilters = {
 
 export type AdminReferenceData = {
     users: Array<{ id: string; username: string; displayName: string }>;
-    channels: Array<{ id: string; name: string; models: string[] }>;
+    channels: Array<{ id: string; name: string; enabled: boolean; models: string[] }>;
 };
 
 export type AdminAnalytics = {
@@ -318,6 +319,7 @@ export type RuntimeResourcePolicy = {
     sessionCount: number;
     taskCount: number;
     apiCallLogCount: number;
+    recycleBinRetentionDays?: number;
 };
 
 export type RuntimeTaskPolicy = {
@@ -415,6 +417,14 @@ export async function login(input: { username: string; password: string }) {
 
 export function sendRegistrationEmailCode(email: string) {
     return request<{ sent: boolean }>(api.post("/auth/email-code", { email }));
+}
+
+export function sendPasswordResetEmailCode(email: string) {
+    return request<{ sent: boolean }>(api.post("/auth/password-reset-code", { email }));
+}
+
+export function resetPassword(input: { email: string; emailCode: string; password: string }) {
+    return request<{ reset: boolean }>(api.post("/auth/password-reset", input));
 }
 
 export function register(input: { username: string; email?: string; emailCode?: string; displayName?: string; password: string }) {

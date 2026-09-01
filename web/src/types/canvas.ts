@@ -1,4 +1,5 @@
 import type { CanvasColorGrade } from "@/lib/canvas/canvas-color-grade";
+import type { AssetCategory } from "@/lib/asset-category";
 import type { PortraitTextureSettings } from "@/lib/canvas/canvas-portrait-texture";
 import type { StyleExecutionPlan } from "@/lib/canvas/style-profile";
 import type { PortraitClearanceNodeState } from "@/lib/portrait-clearance/contracts";
@@ -194,6 +195,14 @@ export type CanvasNodeMetadata = {
           };
     content?: string;
     previewContent?: string;
+    videoPreview?: {
+        content: string;
+        storageKey?: string;
+        width?: number;
+        height?: number;
+        bytes?: number;
+        mimeType?: string;
+    };
     richText?: Record<string, unknown>;
     composerContent?: string;
     prompt?: string;
@@ -244,9 +253,11 @@ export type CanvasNodeMetadata = {
     mimeType?: string;
     bytes?: number;
     durationMs?: number;
+    /** Whether the video file contains an audio track when this is known. */
+    hasAudio?: boolean;
     assetId?: string;
     assetTags?: string[];
-    assetCategory?: "character" | "environment" | "wardrobe" | "prop" | "weapon" | "style" | "other";
+    assetCategory?: AssetCategory;
     workflowKind?: CanvasWorkflowKind;
     workflowTitle?: string;
     workflowDescription?: string;
@@ -329,6 +340,7 @@ export type CanvasNodeMetadata = {
     versionLabel?: string;
     versionPrimary?: boolean;
     copiedFromNodeId?: string;
+    generationResultPlacement?: "replace-node" | "new-version";
     directorSceneId?: string;
     directorShotId?: string;
     directorPreviewNodeId?: string;
