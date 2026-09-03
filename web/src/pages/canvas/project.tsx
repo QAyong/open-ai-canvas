@@ -12,7 +12,7 @@ import { uploadImage } from "@/services/image-storage";
 import { imageMetadata } from "@/lib/canvas/canvas-generation-task-sync";
 import copyToClipboard from "copy-to-clipboard";
 import { nanoid } from "nanoid";
-import { canvasAppearanceBaseTheme, canvasAppearanceForTheme, normalizeCanvasAppearance, resolveCanvasAppearance, writeCanvasAppearanceDefault, type CanvasAppearance } from "@/lib/canvas/canvas-appearance";
+import { canvasAppearanceBaseTheme, canvasAppearanceForTheme, DEFAULT_CANVAS_BACKGROUND_MODE, normalizeCanvasAppearance, resolveCanvasAppearance, writeCanvasAppearanceDefault, type CanvasAppearance } from "@/lib/canvas/canvas-appearance";
 import { canvasThemes, type CanvasBackgroundMode } from "@/lib/canvas-theme";
 import { persistCanvasMediaPerformanceMode, readCanvasMediaPerformanceMode } from "@/lib/canvas/canvas-performance-mode";
 import { summarizeCanvasContext } from "@/lib/canvas/canvas-context-summary";
@@ -258,7 +258,7 @@ function InfiniteCanvasPage() {
     const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
     const [isMiniMapOpen, setIsMiniMapOpen] = useState(false);
     const [canvasAppearance, setCanvasAppearance] = useState<CanvasAppearance>(() => canvasAppearanceForTheme(colorTheme));
-    const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>("lines");
+    const [backgroundMode, setBackgroundMode] = useState<CanvasBackgroundMode>(DEFAULT_CANVAS_BACKGROUND_MODE);
     const [showImageInfo, setShowImageInfo] = useState(false);
     const [canvasTool, setCanvasTool] = useState<CanvasToolMode>("move");
     const [mediaPerformanceMode, setMediaPerformanceMode] = useState<CanvasMediaPerformanceMode>(readCanvasMediaPerformanceMode);
@@ -1361,11 +1361,13 @@ function InfiniteCanvasPage() {
             setNodes((current) => [...current, created]);
             setConnections((current) => [...current, connection]);
             setSelectedNodeIds(new Set([created.id]));
+            const result = await ensureCanvasNodeAsset({ canvasId: projectId, domainProjectId: currentProject?.projectId, node: created, source: "canvas-manual" });
+            setNodes((current) => current.map((item) => item.id === created.id ? { ...item, metadata: { ...item.metadata, assetId: result.assetId } } : item));
             message.success("候选图片已添加到画布并连接到排查节点");
         } catch (error) {
             message.error(error instanceof Error ? error.message : "候选图片添加失败");
         }
-    }, [message, portraitClearanceNodeId, setConnections, setNodes, setSelectedNodeIds]);
+    }, [currentProject?.projectId, message, portraitClearanceNodeId, projectId, setConnections, setNodes, setSelectedNodeIds]);
     const pendingConnectionSourceNode = pendingConnectionCreate?.connection.handleType === "source" ? nodeById.get(pendingConnectionCreate.connection.nodeId) : null;
     const canCreateDrawingFromConnection = !pendingConnectionCreate?.batchSourceNodeIds?.length && pendingConnectionSourceNode?.type === CanvasNodeType.Image && Boolean(pendingConnectionSourceNode.metadata?.content);
 
@@ -1487,6 +1489,7 @@ function InfiniteCanvasPage() {
 
     const { applyDirectorOutput, createDirectorShot, openDirectorWorkbench, saveDirectorScene } = useCanvasDirector({
         projectId,
+        domainProjectId: currentProject?.projectId,
         directorNodeId,
         directorScenes: currentProject?.directorScenes || [],
         nodesRef,
@@ -1680,12 +1683,16 @@ function InfiniteCanvasPage() {
         message.loading({ key: feedbackKey, content: "正在保存并上传到方舟素材库...", duration: 0 });
         try {
             let resourceID = resourceIdFromStorageKey(node.metadata.storageKey);
+            let persistedNode = node;
             if (!resourceID) {
                 const uploaded = await uploadImage(node.metadata.content);
                 resourceID = resourceIdFromStorageKey(uploaded.storageKey);
                 if (!resourceID) throw new Error("图片未能保存到系统素材库，请检查对象存储配置后重试");
                 handleConfigNodeChange(node.id, imageMetadata(uploaded));
+                persistedNode = { ...node, metadata: { ...node.metadata, ...imageMetadata(uploaded) } };
             }
+            const asset = await ensureCanvasNodeAsset({ canvasId: projectId, domainProjectId: currentProject?.projectId, node: persistedNode, source: "canvas-manual" });
+            handleConfigNodeChange(node.id, { assetId: asset.assetId });
             await syncResourceToArkPrivateAsset(resourceID);
             message.success({ key: feedbackKey, content: "已同步到方舟素材库，Seedance 将自动复用该素材", duration: 4 });
         } catch (error) {
@@ -1693,7 +1700,7 @@ function InfiniteCanvasPage() {
         } finally {
             setArkPrivateAssetUploadNodeId((current) => current === node.id ? null : current);
         }
-    }, [arkPrivateAssetUploadNodeId, handleConfigNodeChange, message]);
+    }, [arkPrivateAssetUploadNodeId, currentProject?.projectId, handleConfigNodeChange, message, projectId]);
 
     const confirmUploadNodeImageToArkPrivateAsset = useCallback((node: CanvasNodeData) => {
         Modal.confirm({
