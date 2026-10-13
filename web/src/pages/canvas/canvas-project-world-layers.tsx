@@ -44,7 +44,6 @@ type CanvasProjectWorldLayersProps = {
     openingBatchIds: Set<string>;
     batchMotionById: Map<string, { x: number; y: number; index: number }>;
     showImageInfo: boolean;
-    reduceMediaEffects: boolean;
     resourceReferenceByNodeId: Map<string, CanvasResourceReference>;
     mentionReferencesByNodeId: Map<string, CanvasResourceReference[]>;
     mediaEffectsDisabledNodeId?: string | null;
@@ -72,11 +71,10 @@ type CanvasProjectWorldLayersProps = {
     onRetry: (node: CanvasNodeData) => void;
     onReloadResource: (node: CanvasNodeData) => void;
     onOpenTaskDetails: (node: CanvasNodeData) => void;
-    onOpenVersions: (node: CanvasNodeData) => void;
     onViewImage: (node: CanvasNodeData) => void;
     onReplaceMedia: (node: CanvasNodeData) => void;
     onOpenTextEditor: (node: CanvasNodeData) => void;
-    onOpenDirector: (node: CanvasNodeData) => void;
+    onOpenPrevis: (node: CanvasNodeData) => void;
     onOpenDrawing: (node: CanvasNodeData) => void;
     onStartBatchConnection: (event: ReactPointerEvent, sourceNodeIds: string[]) => void;
 };
@@ -176,7 +174,7 @@ export const CanvasProjectWorldLayers = memo(function CanvasProjectWorldLayers(p
                         batchPrimary={Boolean(node.metadata?.batchRootId && props.nodeById.get(node.metadata.batchRootId)?.metadata?.primaryImageId === node.id)}
                         batchMotion={props.batchMotionById.get(node.id)}
                         showImageInfo={props.showImageInfo}
-                        reduceMediaEffects={props.reduceMediaEffects || props.mediaEffectsDisabledNodeId === node.id}
+                        disableMediaEffects={props.mediaEffectsDisabledNodeId === node.id}
                         resourceLabel={props.resourceReferenceByNodeId.get(node.id)}
                         mentionReferences={props.mentionReferencesByNodeId.get(node.id) || EMPTY_RESOURCE_REFERENCES}
                         renderNodeContent={props.renderCanvasNodeContent}
@@ -193,11 +191,10 @@ export const CanvasProjectWorldLayers = memo(function CanvasProjectWorldLayers(p
                         onRetry={props.onRetry}
                         onReloadResource={props.onReloadResource}
                         onOpenTaskDetails={props.onOpenTaskDetails}
-                        onOpenVersions={props.onOpenVersions}
                         onViewImage={props.onViewImage}
                         onReplaceMedia={props.onReplaceMedia}
                         onOpenTextEditor={props.onOpenTextEditor}
-                        onOpenDirector={props.onOpenDirector}
+                        onOpenPrevis={props.onOpenPrevis}
                         onOpenDrawing={props.onOpenDrawing}
                         onContextMenu={props.onNodeContextMenu}
                     />

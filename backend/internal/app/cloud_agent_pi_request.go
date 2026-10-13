@@ -68,7 +68,8 @@ func (s *Service) buildEnhancedPiRequest(ctx context.Context, params EnhancedPiR
 	features := s.buildFeaturesConfig(params.RuntimeState)
 
 	// 7. 构建压缩策略
-	compaction := s.buildCompactionStrategy(params.UserID, params.CanvasID)
+	contextBudget := s.cloudAgentContextBudgetForRequest(params.RuntimeState.Request)
+	compaction := s.buildCompactionStrategy(params.UserID, params.CanvasID, contextBudget)
 
 	// 8. 构建权限配置
 	permissions := s.buildPermissionsConfig(params.UserID, params.CanvasID)
@@ -169,15 +170,16 @@ func (s *Service) buildFeaturesConfig(state *cloudAgentRuntime) map[string]any {
 	}
 }
 
-// buildPermissionsConfig 构建权限配置
+// buildPermissionsConfig 根据当前账号的画布归属生成运行时权限。
+// userID 是登录账号，canvasID 是画布 ID（不是所属项目 ID）；查询失败时拒绝访问。
 func (s *Service) buildPermissionsConfig(userID, canvasID string) map[string]any {
-	// 从数据库读取实际权限
-	canvas, err := s.repo.GetCanvas(userID, canvasID)
+	// 与画布读写工具共用账号归属查询，不访问旧的 Canvas 扩展模型。
+	_, err := s.repo.CanvasProjectForUser(userID, canvasID)
 	if err != nil {
 		log.Printf("[Agent] failed to get canvas for permissions: %v", err)
 		// 返回最小权限集
 		return map[string]any{
-			"canReadCanvas":      true,
+			"canReadCanvas":      false,
 			"canWriteCanvas":     false,
 			"canDeleteNodes":     false,
 			"canCreateNodes":     false,
@@ -185,51 +187,21 @@ func (s *Service) buildPermissionsConfig(userID, canvasID string) map[string]any
 			"canDuplicateNodes":  false,
 			"canManageRelations": false,
 			"canInviteUsers":     false,
-			"canExportCanvas":    true,
+			"canExportCanvas":    false,
 			"maxTokenBudget":     200000,
 			"maxSteps":           50,
 		}
 	}
 
-	// 检查用户是否是画布所有者
-	isOwner := canvas.UserID == userID
-
-	// 检查协作权限
-	canWrite := isOwner
-	canDelete := isOwner
-	canInvite := isOwner
-
-	if canvas.Metadata != nil {
-		if collaborators, ok := canvas.Metadata["collaborators"].([]any); ok {
-			for _, collab := range collaborators {
-				if collabMap, ok := collab.(map[string]any); ok {
-					if collabUserID, _ := collabMap["userId"].(string); collabUserID == userID {
-						role, _ := collabMap["role"].(string)
-						switch role {
-						case "admin":
-							canWrite = true
-							canDelete = true
-							canInvite = true
-						case "editor":
-							canWrite = true
-						case "viewer":
-							// 只读权限
-						}
-					}
-				}
-			}
-		}
-	}
-
 	return map[string]any{
 		"canReadCanvas":      true,
-		"canWriteCanvas":     canWrite,
-		"canDeleteNodes":     canDelete,
-		"canCreateNodes":     canWrite,
-		"canMoveNodes":       canWrite,
-		"canDuplicateNodes":  canWrite,
-		"canManageRelations": canWrite,
-		"canInviteUsers":     canInvite,
+		"canWriteCanvas":     true,
+		"canDeleteNodes":     true,
+		"canCreateNodes":     true,
+		"canMoveNodes":       true,
+		"canDuplicateNodes":  true,
+		"canManageRelations": true,
+		"canInviteUsers":     true,
 		"canExportCanvas":    true,
 		"maxTokenBudget":     200000,
 		"maxSteps":           50,
@@ -238,13 +210,14 @@ func (s *Service) buildPermissionsConfig(userID, canvasID string) map[string]any
 
 // buildModelConfig 构建模型配置
 func (s *Service) buildModelConfig(modelID string, state *cloudAgentRuntime) map[string]any {
+	budget := s.cloudAgentContextBudgetForRequest(state.Request)
 	return map[string]any{
 		"id":            modelID,
 		"name":          modelID,
 		"reasoning":     cloudAgentReasoningEnabled(state.Policy.ReasoningMode),
 		"input":         []string{"text", "image"},
-		"contextWindow": 200000,
-		"maxTokens":     8192,
+		"contextWindow": budget.ContextWindowTokens,
+		"maxTokens":     budget.MaxOutputTokens,
 		"provider":      state.Request.ChannelID,
 		"switchable":    true,
 		"temperature":   0.7,

@@ -120,6 +120,20 @@ export function readNodeGenerationSpec(node: Pick<CanvasNodeData, "type" | "meta
 }
 
 
+export function nodeGenerationPrompt(node: Pick<CanvasNodeData, "type" | "metadata">): string {
+    const mode = canvasGenerationMode(node.type);
+    if (mode) {
+        try {
+            const spec = readNodeGenerationSpec(node);
+            if (spec?.mode === mode) return spec.prompt;
+        } catch {
+            // A malformed legacy contract should not make canvas discovery fail.
+        }
+    }
+    const metadata = node.metadata || {};
+    return typeof metadata.composerContent === "string" ? metadata.composerContent : typeof metadata.prompt === "string" ? metadata.prompt : "";
+}
+
 export function canonicalGenerationMetadata(node: CanvasNodeData, mode: string): CanvasNodeMetadata {
     if (!canvasGenerationMode(mode)) return { ...node.metadata };
     const spec = readNodeGenerationSpec(node);
@@ -185,6 +199,7 @@ export function synchronizeGenerationSpec(node: CanvasNodeData, patch: Partial<C
     if (Object.prototype.hasOwnProperty.call(patch, "composerContent") && typeof patch.composerContent === "string") next.prompt = patch.composerContent;
     else if (Object.prototype.hasOwnProperty.call(patch, "prompt") && typeof patch.prompt === "string") next.prompt = patch.prompt;
     if (Object.prototype.hasOwnProperty.call(patch, "model")) {
+        if (patch.model !== node.metadata?.model && !Object.prototype.hasOwnProperty.call(patch, "imageParameters")) delete next.options.imageParameters;
         const model = patch.model ? decodeChannelModel(patch.model) : null;
         next.modelSelection = model ? { kind: "channel", channelId: model.channelId, modelKey: model.model } : undefined;
         delete (metadata as Record<string, unknown>).logicalModelId;

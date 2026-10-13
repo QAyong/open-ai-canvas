@@ -1,7 +1,8 @@
-import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent } from "react";
 import { Check, ChevronDown, Coins } from "lucide-react";
 import { Popover } from "antd";
 
+import { imageQualityLabel } from "@/lib/image-quality";
 import { canvasThemes, type CanvasTheme } from "@/lib/canvas-theme";
 import { modelCapabilityConfigFor, videoDurationOptions } from "@/lib/model-capabilities";
 import { formatPriceRange, modelQuoteDescription, modelQuoteRequest, normalizeTierResolution, priceTierSummaryLabel, priceTiersForCurrentSelection } from "@/lib/model-pricing";
@@ -13,7 +14,8 @@ import { useActiveTheme } from "@/stores/canvas/use-canvas-theme-store";
 import { useUserStore } from "@/stores/use-user-store";
 import { ModelLogo } from "@/components/model-logo";
 import { ModelTags } from "@/components/model-tags";
-import { quoteModel, type LogicalModelQuote } from "@/services/api/logical-models";
+import { videoReferenceCapabilityTag } from "@/lib/model-tags";
+import { quoteModel, type LogicalModelQuote, type PublicChannelModelAvailability } from "@/services/api/logical-models";
 
 type ModelPickerProps = {
     config: AiConfig;
@@ -30,6 +32,7 @@ type ModelPickerProps = {
     variant?: "default" | "creation";
     requirements?: ModelRequirements;
     showConfiguredModelName?: boolean;
+    modelFilter?: (model: string) => boolean;
 };
 
 export function ModelPicker({
@@ -47,6 +50,7 @@ export function ModelPicker({
     variant = "creation",
     requirements,
     showConfiguredModelName = false,
+    modelFilter,
 }: ModelPickerProps) {
     const creditsEnabled = useUserStore((state) => state.features.creditsEnabled);
     const pickerId = useId();
@@ -54,10 +58,11 @@ export function ModelPicker({
     const rawTheme = useActiveTheme();
     const theme = (canvasThemes[rawTheme as keyof typeof canvasThemes] ?? canvasThemes.dark) as CanvasTheme;
     const [open, setOpen] = useState(false);
+    const [availableHeight, setAvailableHeight] = useState(0);
     const [activeGroupKey, setActiveGroupKey] = useState<string | null>(null);
     const menuRef = useRef<HTMLDivElement>(null);
     const triggerRef = useRef<HTMLButtonElement>(null);
-    const options = useMemo(() => Array.from(new Set(selectableModelsByCapability(config, capability).filter(Boolean))), [capability, config]);
+    const options = useMemo(() => Array.from(new Set(selectableModelsByCapability(config, capability).filter((model) => Boolean(model) && (!modelFilter || modelFilter(model))))), [capability, config, modelFilter]);
     const optionGroups = useMemo(() => groupModelsForPicker(config, options), [config, options]);
     const storedCurrent = value?.trim() || "";
     // 参数档位会在选中模型后由调用方归一到其能力配置，不能因为旧模型留下的参数而禁止切换。
@@ -69,6 +74,21 @@ export function ModelPicker({
     const quoteRequest = useMemo(() => modelQuoteRequest(config, current, capability, requirements), [capability, config, current, requirements]);
     const [routeQuote, setRouteQuote] = useState<LogicalModelQuote | undefined>();
     const creationVariant = variant === "creation";
+
+    useLayoutEffect(() => {
+        if (!open) return;
+        const updateAvailableHeight = () => {
+            const { top, bottom } = triggerRef.current!.getBoundingClientRect();
+            setAvailableHeight(Math.max(top, window.innerHeight - bottom));
+        };
+        updateAvailableHeight();
+        window.addEventListener("resize", updateAvailableHeight);
+        window.addEventListener("scroll", updateAvailableHeight, true);
+        return () => {
+            window.removeEventListener("resize", updateAvailableHeight);
+            window.removeEventListener("scroll", updateAvailableHeight, true);
+        };
+    }, [open]);
 
     useEffect(() => {
         if (!showSelectedPrice || !creditsEnabled || !quoteRequest) {
@@ -118,7 +138,7 @@ export function ModelPicker({
         window.requestAnimationFrame(() => {
             const buttons = menuRef.current?.querySelectorAll<HTMLButtonElement>('[data-model-picker-item]:not(:disabled)');
             const target = last ? buttons?.item((buttons?.length || 1) - 1) : buttons?.item(0);
-            target?.focus();
+            focusPickerOption(target);
         });
     };
     const handleTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
@@ -131,7 +151,7 @@ export function ModelPicker({
         if (event.key === "Escape") {
             event.preventDefault();
             setOpen(false);
-            triggerRef.current?.focus();
+            triggerRef.current?.focus({ preventScroll: true });
             return;
         }
         if (event.key === "ArrowLeft" && activeGroupKey !== null) {
@@ -146,7 +166,7 @@ export function ModelPicker({
         event.preventDefault();
         const activeIndex = buttons.indexOf(document.activeElement as HTMLButtonElement);
         const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : event.key === "ArrowUp" ? Math.max(0, activeIndex - 1) : Math.min(buttons.length - 1, activeIndex + 1);
-        buttons[nextIndex]?.focus();
+        focusPickerOption(buttons[nextIndex]);
     };
     const content = (
         <div
@@ -156,7 +176,7 @@ export function ModelPicker({
                 "canvas-model-picker-menu creation-model-picker-menu max-w-[calc(100vw-24px)]",
                 activeGroupKey === null ? "is-brand-list" : "is-model-list",
             )}
-            style={{ background: theme.node.panel, color: theme.node.text }}
+            style={{ background: theme.node.panel, color: theme.node.text, "--canvas-model-picker-available-height": `${availableHeight}px` } as CSSProperties}
             role="listbox"
             aria-label={placeholder}
             onKeyDown={handleMenuKeyDown}
@@ -185,7 +205,7 @@ export function ModelPicker({
                             </button>;
                         })}
                     </div>
-                    {optionGroups.filter((group) => group.key === activeGroupKey).map((group) => <section key={group.key} className="canvas-model-picker-group canvas-model-picker-model-pane min-w-0 overflow-hidden">
+                    {optionGroups.filter((group) => group.key === activeGroupKey).map((group) => <section key={group.key} className="canvas-model-picker-group canvas-model-picker-model-pane min-w-0">
                         <div className="grid min-w-0 gap-1">
                             {group.models.map((modelGroup) => {
                                 const selected = modelGroup.models.includes(current);
@@ -243,7 +263,9 @@ export function ModelPicker({
                 onOpenChange={setPickerOpen}
                 trigger="click"
                 placement="bottomLeft"
+                align={{ overflow: { adjustY: true, shiftX: true } }}
                 arrow={false}
+                motion={{ motionName: "" }}
                 content={content}
                 classNames={{
                     root: cn("canvas-model-picker-popover", "creation-model-picker-popover", popoverClassName),
@@ -273,6 +295,19 @@ export function ModelPicker({
             </Popover>
         </div>
     );
+}
+
+function focusPickerOption(target: HTMLButtonElement | null | undefined) {
+    if (!target) return;
+    target.focus({ preventScroll: true });
+    // Only reveal the focused row inside its pane; scrolling portal ancestors moves the page.
+    const pane = target.closest<HTMLElement>(".canvas-model-picker-model-pane, .canvas-model-picker-menu");
+    if (!pane) return;
+    const row = target.getBoundingClientRect();
+    const top = pane.getBoundingClientRect().top + pane.clientTop;
+    const bottom = top + pane.clientHeight;
+    const delta = row.top < top ? row.top - top : row.bottom > bottom ? row.bottom - bottom : 0;
+    if (delta) pane.scrollTop += delta;
 }
 
 function emptyModelLabel(config: AiConfig, capability?: ModelCapability) {
@@ -311,6 +346,8 @@ export function ModelLabel({
     const logicalCost = channel.modelCosts?.find((item) => item.model === modelOptionName(model));
     const logicalSpec = logicalCost?.logicalCapabilitySpec;
     const videoProfile = capability === "video" ? modelCapabilityConfigFor(config, model).video : undefined;
+    const capabilityTag = videoReferenceCapabilityTag(videoProfile?.references);
+    const modelTags = capabilityTag ? [capabilityTag, ...(logicalCost?.tags || [])] : logicalCost?.tags;
     const capabilitySummary =
         disabledReason ||
         logicalCost?.description?.trim() ||
@@ -329,11 +366,12 @@ export function ModelLabel({
                             <ModelPrice price={modelMenuPrice(config, model, capability, true, requirements)} />
                         </span>
                     ) : null}
+                    <ModelAvailabilityBadge availability={modelAvailability(config, model)} available={logicalCost?.available ?? true} showAvailability={channel.scope === "system"} />
                 </span>
                 <span className={cn("canvas-model-picker-description mt-1 block", showDescription && "is-visible")} style={{ color: theme.node.muted }}>
                     {capabilitySummary}
                 </span>
-                <ModelTags tags={logicalCost?.tags} />
+                <ModelTags tags={modelTags} />
             </span>
             {!creationVariant && meta.time ? (
                 <span className="shrink-0 rounded-full px-1.5 py-0.5 text-[var(--fs-tiny)] tabular-nums" style={{ background: theme.toolbar.itemHover, color: theme.node.muted }}>
@@ -467,7 +505,8 @@ function tierSpecificationLabel(tier: NonNullable<NonNullable<AiConfig["channels
     const operation = selector.operation && selector.operation !== "*" ? operationLabels[selector.operation] || selector.operation : "";
     const details = [
         operation,
-        selector.quality && selector.quality !== "*" ? selector.quality.toUpperCase() : "",
+        selector.quality && selector.quality !== "*" ? imageQualityLabel(selector.quality) : "",
+        selector.resolution && selector.resolution !== "*" ? imageQualityLabel(selector.resolution) : "",
         selector.size && selector.size !== "*" ? selector.size : "",
         tier.resolution !== "*" ? tierResolutionLabel(tier.resolution) : "",
         tier.videoSeconds ? tierDurationLabel(tier.videoSeconds) : "",
@@ -509,6 +548,58 @@ function ModelPrice({ price, quote, compact = false }: { price: ModelMenuPrice |
     );
 }
 
+function modelAvailability(config: AiConfig, model: string): PublicChannelModelAvailability | undefined {
+    if (!model) return undefined;
+    const channel = resolveModelChannel(config, model);
+    return channel.modelCosts?.find((item) => item.model === modelOptionName(model))?.availability;
+}
+
+function ModelAvailabilityBadge({ availability, available, showAvailability }: { availability?: PublicChannelModelAvailability; available: boolean; showAvailability: boolean }) {
+    if (!showAvailability) return null;
+    const label = availability?.dataState === "ready" && availability.rate24h !== null
+        ? `${Math.round(availability.rate24h * 100)}%`
+        : availability?.dataState === "insufficient"
+            ? "数据不足"
+            : "暂无数据";
+    const trend = availability?.trend7d || [];
+    const trendSamples = trend.reduce((total, item) => total + item.sampleCount, 0);
+    const summary = availability
+        ? `当前${available ? "可用" : "不可用"}；近24小时${label}，样本 ${availability.sampleCount24h} 条`
+        : `当前${available ? "可用" : "不可用"}；历史成功率暂不可用`;
+    const content = availability ? (
+        <div className="model-picker-availability-popover">
+            <div className="model-picker-availability-popover-head">
+                <strong>近24小时成功率</strong>
+                <span>{label}</span>
+            </div>
+            <div className="model-picker-availability-popover-meta">{availability.sampleCount24h} 次 create 尝试 · 7天样本 {trendSamples} 条</div>
+            <div className="model-picker-availability-trend" aria-label="近7天成功率趋势">
+                {trend.map((item) => {
+                    const dayLabel = item.rate === null ? "暂无数据" : `${Math.round(item.rate * 100)}%`;
+                    return <span key={item.day} className={`model-picker-availability-segment is-${item.dataState}`} title={`${item.day}：${dayLabel}，${item.sampleCount} 条`} style={item.rate === null ? undefined : { opacity: 0.35 + item.rate * 0.65 }} />;
+                })}
+            </div>
+            <div className="model-picker-availability-popover-foot">7天分段趋势 · 悬停查看每日样本</div>
+        </div>
+    ) : null;
+    return (
+        <Popover content={content} trigger={["hover", "focus"]} placement="topRight" arrow={false}>
+            <span
+                className={`model-picker-availability is-${availability?.dataState || "unavailable"}`}
+                role="img"
+                tabIndex={0}
+                aria-label={summary}
+                title={summary}
+                onClick={(event) => event.stopPropagation()}
+                onMouseDown={(event) => event.stopPropagation()}
+                onPointerDown={(event) => event.stopPropagation()}
+            >
+                <span className="model-picker-availability-dot" aria-hidden="true" />
+                <span className="model-picker-availability-label">近24h {label}</span>
+            </span>
+        </Popover>
+    );
+}
 function modelMenuMeta(model: string, capability?: ModelCapability): { description: string; time?: string } {
     const name = modelOptionName(model).toLowerCase();
     if (capability === "image") {

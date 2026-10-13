@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"infinite-canvas/backend/internal/model"
+	"yingce/backend/internal/model"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -27,6 +27,16 @@ type APICallLogFilter struct {
 	IDs        []string
 	Page       int
 	Limit      int
+}
+
+// PublicModelAvailabilityFilter limits the public availability read model to
+// system catalog channel models. Keeping this query separate from admin
+// analytics avoids exposing the admin payload or accidentally including user
+// owned channels in a public response.
+type PublicModelAvailabilityFilter struct {
+	From       time.Time
+	To         time.Time
+	ChannelIDs []string
 }
 
 func (r *Repository) RecordUserActivity(userID string, event string, count int, now time.Time) error {
@@ -96,6 +106,24 @@ func (r *Repository) AnalyticsAPICallLogs(filter AnalyticsFilter) ([]model.ApiCa
 	var logs []model.ApiCallLog
 	query := r.apiCallLogQuery(filter)
 	return logs, query.Omit("RequestBody", "ResponseBody").Find(&logs).Error
+}
+
+// PublicModelAvailabilityLogs returns the compact, user-facing create
+// outcomes used by the model catalog availability read model. Polling,
+// downloads, uploads and local bookkeeping are deliberately excluded here.
+func (r *Repository) PublicModelAvailabilityLogs(filter PublicModelAvailabilityFilter) ([]model.ApiCallLog, error) {
+	var logs []model.ApiCallLog
+	if len(filter.ChannelIDs) == 0 || !filter.To.After(filter.From) {
+		return logs, nil
+	}
+	query := whereTimeRange(r.db.Select("channel_id", "model", "status", "created_at"), "api_call_logs.created_at", filter.From, filter.To).
+		Where("api_call_logs.channel_id IN ?", filter.ChannelIDs).
+		Where("api_call_logs.user_id <> ''").
+		Where("api_call_logs.model <> ''").
+		Where("api_call_logs.request_kind = ?", "create").
+		Where("api_call_logs.status IN ?", []model.ApiCallStatus{model.ApiCallStatusSucceeded, model.ApiCallStatusFailed}).
+		Order("api_call_logs.created_at asc")
+	return logs, query.Find(&logs).Error
 }
 
 func (r *Repository) AnalyticsActivities(filter AnalyticsFilter) ([]model.UserDailyActivity, error) {
@@ -229,15 +257,21 @@ func (r *Repository) APICallLogUsageForTask(userID, taskID string) (model.ApiCal
 	return log, true, nil
 }
 
+// LatestAPICallForTask 返回任务最近一次非轮询上游调用的失败摘要。
+func (r *Repository) LatestAPICallForTask(taskID string) (model.ApiCallLog, error) {
+	if strings.TrimSpace(taskID) == "" {
+		return model.ApiCallLog{}, nil
+	}
+	var log model.ApiCallLog
+	err := r.db.Select("status,status_code,error_code,error").Where("task_id = ? AND request_kind <> ?", taskID, "poll").
+		Order("created_at DESC").Limit(1).Find(&log).Error
+	return log, err
+}
+
 // LatestAPICallStatusForTask 返回任务最近一次上游调用的 HTTP 状态码；
 // 任务没收到任何上游响应（例如网络错误）时返回 0。
 func (r *Repository) LatestAPICallStatusForTask(taskID string) (int, error) {
-	if strings.TrimSpace(taskID) == "" {
-		return 0, nil
-	}
-	var log model.ApiCallLog
-	err := r.db.Select("status_code").Where("task_id = ? AND request_kind <> ?", taskID, "poll").
-		Order("created_at DESC").Limit(1).Find(&log).Error
+	log, err := r.LatestAPICallForTask(taskID)
 	return log.StatusCode, err
 }
 

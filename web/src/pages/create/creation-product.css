@@ -98,10 +98,9 @@
     transform: translateY(-1px);
     box-shadow: 0 8px 18px color-mix(in srgb, var(--user-ink) 8%, transparent);
 }
-.app-user-workspace .creation-chat-control > svg:first-child,
-.app-user-workspace .creation-model-picker .canvas-model-picker-trigger-icon { transition: transform var(--user-motion), color var(--user-motion); color: currentColor; }
-.app-user-workspace .creation-chat-control:hover > svg:first-child,
-.app-user-workspace .creation-model-picker:hover .canvas-model-picker-trigger-icon { transform: scale(1.06); }
+.app-user-workspace .creation-chat-control > svg:first-child { transition: transform var(--user-motion), color var(--user-motion); color: currentColor; }
+.app-user-workspace .creation-model-picker .canvas-model-picker-trigger-icon { color: currentColor; }
+.app-user-workspace .creation-chat-control:hover > svg:first-child { transform: scale(1.06); }
 .app-user-workspace .creation-chat-control.is-clear:hover { background: color-mix(in srgb, var(--status-error, #c45b5b) 12%, var(--user-surface)) !important; color: var(--status-error, #c45b5b) !important; }
 .app-user-workspace .creation-launchpad .creation-reference-add-button:hover:not(:disabled) {
     border-style: solid;
@@ -271,4 +270,18 @@ html:not(.dark) .app-product-overlays .creation-control-popover .ant-popover-con
 html:not(.dark) .app-product-overlays .creation-control-popover .ant-popover-inner,
 html:not(.dark) .app-product-overlays .creation-control-popover-surface {
     box-shadow: 0 16px 40px rgba(25, 25, 30, .12) !important;
+}
+
+/* 长提示词保持编辑器可控：按当前字号最多展示约 12 行，继续输入时只在编辑区内部滚动。 */
+.creation-home .creation-chat-editor textarea,
+.creation-home .creation-chat-mention-editor {
+    max-height: 18.6em !important;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
+    overscroll-behavior: contain;
+    scrollbar-gutter: stable;
+}
+
+.creation-home .creation-chat-mention-container {
+    min-height: 0 !important;
 }

@@ -15,9 +15,9 @@ import (
 	"unicode/utf8"
 
 	"gorm.io/gorm"
-	"infinite-canvas/backend/internal/kernel"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/kernel"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 func (s *Service) cloudAgentExecutionOutput(task *model.Task, initial cloudAgentState, options ...CloudAgentRunViewOptions) (*CloudAgentRun, error) {
@@ -364,9 +364,7 @@ func (s *Service) advanceCloudAgent(run *model.CloudAgentExecution) (err error) 
 		return s.failCloudAgent(run, &state, fmt.Sprintf("达到 %d 次模型调用上限，本轮已停止", stepLimit))
 	}
 	cloudAgentDrainInterjections(run.ID, &state)
-	// 上一步的模型调用已经回来，先用它的上游实测用量更新压力锚点，再发下一步：
-	// 下一步的读数与后面的正文裁剪判定都要用到这份锚点。
-	s.recordCloudAgentTokenAnchor(run.UserID, &state)
+	softReadGuard := state.ReadLoopNudge
 	// 轮内唯一裁剪 = 图片：超出保留轮次的看图结果换成文字回执（正文一律保留）。
 	// 它必须在压缩判定之前跑：图片是最贵的一类内容，先移出再评估 token 压力才有意义。
 	if changed, pruned := cloudAgentPruneInspectedImages(&state.Canonical, nil); changed {
@@ -417,6 +415,13 @@ func (s *Service) advanceCloudAgent(run *model.CloudAgentExecution) (err error) 
 	}
 	if tokens > contextBudget.InputBudgetTokens {
 		return s.failCloudAgent(run, &state, cloudAgentContextBudgetMessage(contextBudget))
+	}
+	if softReadGuard {
+		// 只对紧接着的一次模型请求暂时收起只读工具。运行仍保持 running，
+		// 下一步模型可以回复、提问或执行有实际变化的写操作。
+		state.ReadLoopNudge = false
+		state.ReadLoopToolName = ""
+		state.ReadLoopCount = 0
 	}
 	req := CreateTaskRequest{ProjectID: state.Request.CanvasID, Type: "canvas_text", Operation: "cloud_agent_step", Prompt: state.Request.Prompt, Model: state.Request.Model, LogicalModelID: state.Request.LogicalModelID, Input: input}
 	return s.enqueueCloudAgentTask(run, &state, req, nil)
@@ -488,18 +493,73 @@ func compactCloudAgentContext(request *canonicalAgentRequest, budget cloudAgentC
 	return changed
 }
 
+// 单个工具调用参数的字节上限。中文约一万字——正常调用远低于此；超过通常意味着模型
+// 把整份剧本文本塞进了一次调用（线上 run ag3580aca 即此），应由纠偏路径引导拆分，
+// 而不是判死整个运行。
+const cloudAgentToolArgumentsByteLimit = 32000
+
 func validateCloudAgentCalls(calls []cloudAgentCall) error {
 	seen := make(map[string]bool, len(calls))
 	for _, call := range calls {
-		if err := validateCloudAgentID(call.ID, "工具调用 ID", 160); err != nil || seen[call.ID] || call.Function.Name == "" || len(call.Function.Name) > 80 || !utf8.ValidString(call.Function.Name) {
+		reason, argumentProblem := cloudAgentInvalidCallReason(call, seen)
+		if reason != "" {
+			if argumentProblem {
+				return errors.New("invalid Agent tool arguments")
+			}
 			return errors.New("invalid Agent tool call")
 		}
-		if err := decodeCloudAgentJSONObject(call.Function.Arguments, &map[string]any{}); err != nil || len(call.Function.Arguments) > 32000 {
-			return errors.New("invalid Agent tool arguments")
-		}
-		seen[call.ID] = true
 	}
 	return nil
+}
+
+// 连续多少批模型调用含无效参数后放弃纠偏、回到硬失败路径。
+const cloudAgentInvalidArgumentStepLimit = 3
+
+// cloudAgentBatchInvalidCalls 找出一批调用里所有无效项，返回 index → 原因，以及
+// 是否存在结构类问题（ID 无效/重复、工具名无效——非参数类）。无效调用也登记 seen，
+// 避免同批后续调用复用无效调用的 ID 被放行。
+//
+// 结构类问题不能按参数问题逐调用纠偏：重复 ID 的调用与回执按 ID 配对会产生歧义
+// （第二条同 ID 调用的拒绝回执可能被当作第一条有效调用的结果），历史配对校验也会
+// 失败——保持整步拒绝的既有语义。参数类（超限/JSON 非法）才走逐调用纠偏。
+func cloudAgentBatchInvalidCalls(calls []cloudAgentCall) (map[int]string, bool) {
+	seen := make(map[string]bool, len(calls))
+	invalid := map[int]string{}
+	structural := false
+	for index, call := range calls {
+		reason, argumentProblem := cloudAgentInvalidCallReason(call, seen)
+		if reason == "" {
+			continue
+		}
+		invalid[index] = reason
+		seen[call.ID] = true
+		if !argumentProblem {
+			structural = true
+		}
+	}
+	return invalid, structural
+}
+
+// cloudAgentInvalidCallReason 返回单个调用未通过校验的原因与是否属于参数问题；
+// 空原因表示有效。seen 记录本批已出现的调用 ID（重复即无效），有效调用由本函数登记。
+func cloudAgentInvalidCallReason(call cloudAgentCall, seen map[string]bool) (string, bool) {
+	if err := validateCloudAgentID(call.ID, "工具调用 ID", 160); err != nil {
+		return "调用 ID 无效", false
+	}
+	if seen[call.ID] {
+		return "调用 ID 与同批其他调用重复", false
+	}
+	if call.Function.Name == "" || len(call.Function.Name) > 80 || !utf8.ValidString(call.Function.Name) {
+		return "工具名无效", false
+	}
+	if err := decodeCloudAgentJSONObject(call.Function.Arguments, &map[string]any{}); err != nil {
+		return "参数不是合法的 JSON 对象", true
+	}
+	if len(call.Function.Arguments) > cloudAgentToolArgumentsByteLimit {
+		return "参数超过 32000 字节上限（中文约一万字）；长文本请拆分为多次调用，例如先建空结构再逐段追加", true
+	}
+	seen[call.ID] = true
+	return "", false
 }
 
 func (s *Service) terminateCloudAgent(run *model.CloudAgentExecution, message string) error {

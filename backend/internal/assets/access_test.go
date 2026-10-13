@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"infinite-canvas/backend/internal/kernel"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/storage"
+	"yingce/backend/internal/kernel"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/outbound/outboundtest"
+	"yingce/backend/internal/storage"
 )
 
 func testReadyResource(provider string) *model.Resource {
@@ -26,6 +27,7 @@ func testPlatformURL(variants *[]ResourceVariant) func(ResourceVariant, time.Tim
 }
 
 func TestResolveAccessPolicyMatrix(t *testing.T) {
+	outboundtest.PublicDNS(t, "s3.amazonaws.com")
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	tests := []struct {
 		name       string
@@ -55,7 +57,7 @@ func TestResolveAccessPolicyMatrix(t *testing.T) {
 		{
 			name:     "CDN without supported auth falls back to public origin",
 			resource: testReadyResource("aliyun"),
-			setting:  storage.Settings{Provider: "aliyun", Endpoint: "https://s3.amazonaws.com", CDNBaseURL: "https://media.example.com", AccessKeyID: "id", AccessKeySecret: "secret"},
+			setting:  storage.Settings{Provider: "aliyun", Endpoint: "https://s3.amazonaws.com", Bucket: "private-bucket", CDNBaseURL: "https://media.example.com", AccessKeyID: "id", AccessKeySecret: "secret"},
 			options:  AccessOptions{Purpose: PurposeDisplay},
 			wantMode: DeliveryOrigin, wantReason: "cdn_auth_unconfigured",
 		},
@@ -98,6 +100,12 @@ func TestResolveAccessPolicyMatrix(t *testing.T) {
 			if access.Delivery != tt.wantMode || access.FallbackReason != tt.wantReason {
 				t.Fatalf("ResolveAccess() = %#v, want mode=%q reason=%q", access, tt.wantMode, tt.wantReason)
 			}
+			if tt.wantMode == DeliveryOrigin {
+				parsed, err := url.Parse(access.URL)
+				if err != nil || parsed.Host != "private-bucket.s3.amazonaws.com" || parsed.Query().Get("Signature") == "" {
+					t.Fatalf("invalid signed origin URL: %q (%v)", access.URL, err)
+				}
+			}
 			if tt.wantURL != "" && access.URL != tt.wantURL {
 				t.Fatalf("ResolveAccess().URL = %q, want %q", access.URL, tt.wantURL)
 			}
@@ -132,15 +140,11 @@ func TestResolveAccessVariantAndExpiryContract(t *testing.T) {
 	}
 }
 
-func TestResolveDownloadUsesObjectOriginAttachmentInsteadOfCDNOrProxy(t *testing.T) {
+func TestResolveDownloadUsesPublicCDNAttachment(t *testing.T) {
 	now := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)
 	resource := testReadyResource("aliyun")
 	setting := storage.Settings{
-		// A public IP keeps the test deterministic: PublicOrigin intentionally
-		// resolves hostnames to reject private DNS answers, so a made-up OSS host
-		// would depend on the machine's DNS configuration.
-		Provider: "aliyun", Endpoint: "https://1.1.1.1", Bucket: "private-bucket",
-		AccessKeyID: "access-id", AccessKeySecret: "secret-value", CDNBaseURL: "https://media.example.com",
+		Provider: "aliyun", CDNBaseURL: "https://media.example.com",
 		Delivery: storage.DeliverySettings{CDNAuthMode: "public"},
 	}
 	access, err := ResolveAccess(resource, setting, AccessOptions{Purpose: PurposeDownload, DownloadName: "画布_镜头01.mp4"}, now, testPlatformURL(&[]ResourceVariant{}))
@@ -152,7 +156,7 @@ func TestResolveDownloadUsesObjectOriginAttachmentInsteadOfCDNOrProxy(t *testing
 		t.Fatal(err)
 	}
 	disposition := parsed.Query().Get("response-content-disposition")
-	if access.Delivery != DeliveryOrigin || parsed.Host != "1.1.1.1" || !strings.HasPrefix(disposition, "attachment") || !strings.Contains(strings.ToLower(disposition), "utf-8''") {
+	if access.Delivery != DeliveryCDN || access.ExpiresAt != nil || parsed.Host != "media.example.com" || !strings.HasPrefix(disposition, "attachment") || !strings.Contains(strings.ToLower(disposition), "utf-8''") {
 		t.Fatalf("download access = %#v, disposition=%q", access, disposition)
 	}
 }

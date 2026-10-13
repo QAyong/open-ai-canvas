@@ -6,9 +6,9 @@ import (
 	"reflect"
 	"testing"
 
-	"infinite-canvas/backend/internal/database"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/database"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
@@ -97,7 +97,7 @@ func cancelAuthorizationFixture(t *testing.T) (*Service, *gorm.DB, *model.Task) 
 	}
 	req := agentTestRequest()
 	profile := cloudAgentProfileSnapshot{Revision: agentProfileRevision(nil), Hash: agentProfileHash("")}
-	_, policy, err := compileCloudAgentPolicies(req, nil, "", profile)
+	_, policy, err := compileCloudAgentPolicies(req, defaultCanvasAppearance().AgentName, nil, "", profile)
 	if err != nil {
 		t.Fatal(err)
 	}

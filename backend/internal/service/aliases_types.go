@@ -1,6 +1,11 @@
 package service
 
-import "infinite-canvas/backend/internal/app"
+import "yingce/backend/internal/app"
+
+const (
+	WorkbenchKindImage = app.WorkbenchKindImage
+	WorkbenchKindVideo = app.WorkbenchKindVideo
+)
 
 type (
 	PaymentOrderQuery                      = app.PaymentOrderQuery
@@ -89,6 +94,7 @@ type (
 	BulkDisableUsersResult                 = app.BulkDisableUsersResult
 	CanvasLibraryPage                      = app.CanvasLibraryPage
 	CanvasLibrarySummary                   = app.CanvasLibrarySummary
+	CanvasOperationsRequest                = app.CanvasOperationsRequest
 	CanvasHistoryList                      = app.CanvasHistoryList
 	CanvasShareRequest                     = app.CanvasShareRequest
 	CanvasShareStatus                      = app.CanvasShareStatus
@@ -239,6 +245,9 @@ type (
 	PublicLinuxDOSetting                   = app.PublicLinuxDOSetting
 	PublicLogicalModel                     = app.PublicLogicalModel
 	PublicLogicalModelPriceTier            = app.PublicLogicalModelPriceTier
+	PublicModelAvailability                = app.PublicModelAvailability
+	PublicModelAvailabilityDataState       = app.PublicModelAvailabilityDataState
+	PublicModelAvailabilityDay             = app.PublicModelAvailabilityDay
 	PublicModelChannel                     = app.PublicModelChannel
 	PublicOSSSetting                       = app.PublicOSSSetting
 	PublicRegistrationSetting              = app.PublicRegistrationSetting
@@ -336,6 +345,11 @@ type (
 	UpdateProjectUnitRequest               = app.UpdateProjectUnitRequest
 	UpdateUserRequest                      = app.UpdateUserRequest
 	UpdateWorkflowStepRequest              = app.UpdateWorkflowStepRequest
+	WorkbenchToolInput                     = app.WorkbenchToolInput
+	WorkbenchPresetInput                   = app.WorkbenchPresetInput
+	WorkbenchToolView                      = app.WorkbenchToolView
+	WorkbenchPresetView                    = app.WorkbenchPresetView
+	WorkbenchTaskInput                     = app.WorkbenchTaskInput
 	UserAnnouncementFeed                   = app.UserAnnouncementFeed
 	UserAssetPage                          = app.UserAssetPage
 	UserAssetPageFilter                    = app.UserAssetPageFilter

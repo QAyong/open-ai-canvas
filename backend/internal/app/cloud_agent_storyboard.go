@@ -6,8 +6,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 const maxCloudAgentStoryboardRows = 100
@@ -77,7 +77,7 @@ func cloudAgentStoryboardPatchSchema() map[string]any {
 	return schema
 }
 
-func validateCloudAgentStoryboardRow(row map[string]any, requireDescription bool) error {
+func validateCloudAgentStoryboardRow(row map[string]any, requireDescription bool, fieldPath string) error {
 	if row == nil {
 		return BadAuthRequest("分镜行不能为空")
 	}
@@ -102,8 +102,9 @@ func validateCloudAgentStoryboardRow(row map[string]any, requireDescription bool
 	if requireDescription {
 		plot := strings.TrimSpace(stringValue(row["plotDescription"]))
 		motion := strings.TrimSpace(stringValue(row["videoMotionPrompt"]))
-		if plot == "" && motion == "" {
-			return BadAuthRequest("新增镜头需要画面描述或视频提示词")
+		imagePrompt := strings.TrimSpace(stringValue(row["imageGenerationPrompt"]))
+		if plot == "" && motion == "" && imagePrompt == "" {
+			return cloudAgentFieldError(fieldPath, "required", "新增镜头需要画面描述、首帧提示词或视频提示词")
 		}
 	}
 	return nil
@@ -115,7 +116,7 @@ func normalizeCloudAgentStoryboardRows(rows []map[string]any, userID, nodeID, se
 	}
 	out := make([]any, 0, len(rows))
 	for index, input := range rows {
-		if err := validateCloudAgentStoryboardRow(input, true); err != nil {
+		if err := validateCloudAgentStoryboardRow(input, true, fmt.Sprintf("rows[%d]", index)); err != nil {
 			return nil, err
 		}
 		row := cloudAgentStoryboardRowDefaults()
@@ -242,12 +243,12 @@ func prepareCloudAgentStoryboardEdit(repo *repository.Repository, userID, canvas
 		return nil, err
 	}
 	beforeHash := cloudAgentCanvasHash(doc)
-	if !cloudAgentNodeSnapshotMatches(doc, args.NodeID, args.SnapshotHash) {
-		return nil, cloudAgentFieldError("snapshotHash", "stale_snapshot", "这个分镜在你读取之后被修改过，本次未写入；请重新读取分镜后再改")
-	}
 	node, storyboard, rows, err := storyboardNodeFromDocument(doc, args.NodeID)
 	if err != nil {
 		return nil, err
+	}
+	if !cloudAgentNodeSnapshotMatches(doc, args.NodeID, args.SnapshotHash) {
+		return nil, cloudAgentFieldError("snapshotHash", "stale_snapshot", "这个分镜在你读取之后被修改过，本次未写入；请重新读取分镜后再改")
 	}
 	index := -1
 	for i, row := range rows {
@@ -294,7 +295,7 @@ func prepareCloudAgentStoryboardEdit(repo *repository.Repository, userID, canvas
 			if len(rows) >= maxCloudAgentStoryboardRows {
 				return nil, BadAuthRequest("单个分镜表最多100个镜头")
 			}
-			if err := validateCloudAgentStoryboardRow(patch, true); err != nil {
+			if err := validateCloudAgentStoryboardRow(patch, true, "patch"); err != nil {
 				return nil, err
 			}
 			row := cloudAgentStoryboardRowDefaults()

@@ -3,12 +3,14 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"gorm.io/gorm"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/repository"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/repository"
 )
 
 func agentMediaFixture(t *testing.T) (*Service, *gorm.DB, cloudAgentMediaArgs) {
@@ -230,6 +232,68 @@ func TestCloudAgentMediaReferenceAndSnapshotGuards(t *testing.T) {
 	}
 }
 
+func TestCloudAgentMediaArgumentFailureContinuesRun(t *testing.T) {
+	s, db, args := agentMediaFixture(t)
+	args.SourceNodeID = "cat" // Existing media node, invalid as a text source.
+	args.ReferenceNodeIDs = []string{"hero"}
+	run, state := agentMediaRun(t, s, args, "request_approval")
+	if err := s.advanceCloudAgentTool(run, &state); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := s.repo.CloudAgent("user", run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, err = cloudAgentDecode(stored)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.Status != "running" {
+		t.Fatalf("repairable media argument failure terminated run: status=%s message=%s", stored.Status, stored.FailureMessage)
+	}
+	var failed *CloudAgentEvent
+	for i := range state.Events {
+		if state.Events[i].Type == "tool_failed" {
+			failed = &state.Events[i]
+		}
+		if state.Events[i].Type == "run_failed" {
+			t.Fatalf("argument error emitted run_failed: %+v", state.Events[i])
+		}
+	}
+	if failed == nil {
+		t.Fatal("missing tool_failed event")
+	}
+	result, _ := failed.Payload["result"].(map[string]any)
+	if result["field"] != "sourceNodeId" || result["issue"] != "invalid_value" || result["requiredAction"] != "fix_arguments" {
+		t.Fatalf("missing actionable field feedback: %+v", result)
+	}
+	var tasks int64
+	if err := db.Model(&model.Task{}).Where("type = ?", "canvas_video").Count(&tasks).Error; err != nil {
+		t.Fatal(err)
+	}
+	if tasks != 0 {
+		t.Fatalf("invalid arguments submitted %d media tasks", tasks)
+	}
+}
+
+func TestCloudAgentUnavailableTransientReferenceIsNotRetryable(t *testing.T) {
+	s, _, args := agentMediaFixture(t)
+	args.ReferenceNodeIDs = nil
+	args.ReferenceTransientIDs = []string{"missing-transient"}
+	_, _, _, err := cloudAgentMediaDocument(s.repo, "user", "agent-canvas", args, map[string]cloudAgentTransientReference{})
+	if err == nil {
+		t.Fatal("missing transient reference was accepted")
+	}
+	var argumentErr *cloudAgentArgumentError
+	if errors.As(err, &argumentErr) {
+		t.Fatalf("unavailable transient reference was classified as a model-correctable argument: %v", err)
+	}
+	class, retryable, action := cloudAgentToolErrorClass(agentTestRequest(), agentMediaCall(args), cloudAgentWrapMediaAdmissionError(err), true)
+	if class != cloudAgentToolErrorAdmission || retryable || action != "report_to_user" {
+		t.Fatalf("unavailable transient reference entered correction retry: class=%s retryable=%v action=%s", class, retryable, action)
+	}
+}
+
 func TestCloudAgentImageCreatesReferencedNode(t *testing.T) {
 	s, db, a := agentMediaFixture(t)
 	capability := DefaultModelCapabilityConfigForModel(string(model.ChannelInterfaceGrokImage), "grok-image")
@@ -262,7 +326,7 @@ func TestCloudAgentImageCreatesReferencedNode(t *testing.T) {
 	if err = json.Unmarshal([]byte(task.InputJSON), &input); err != nil {
 		t.Fatal(err)
 	}
-	if task.Operation != "image_to_image" || len(input.ReferenceImages) != 1 || input.Config.Count != "1" || input.Config.Quality != "2k" {
+	if task.Operation != "image_to_image" || len(input.ReferenceImages) != 1 || input.Config.Count != "1" || input.Config.ImageResolution != "2k" || input.Config.Quality != "" {
 		t.Fatal("image generation contract was lost")
 	}
 	canvas, _ := s.repo.CanvasProjectForUser("user", "agent-canvas")
@@ -505,6 +569,123 @@ func TestCloudAgentModelListFiltersActualReferences(t *testing.T) {
 	if len(catalog.(map[string]any)["models"].([]map[string]any)) != 0 {
 		t.Fatal("no-match query fell back to incompatible models")
 	}
+}
+
+func TestCloudAgentImageCatalogTreatsUnselectedPricedOptionsAsCandidates(t *testing.T) {
+	s, db, _, _ := creationTestService(t)
+	imageModel := seedAgentLogicalImageModel(t, s, db)
+	intent := ModelRequestIntent{Capability: "image", Inputs: map[string]int{}, Options: map[string]any{}}
+
+	models, err := s.PublicLogicalModels(&intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0].ID != imageModel.ID || !models[0].Available || len(models[0].PriceTiers) != 9 {
+		t.Fatalf("unselected image options should expose the priced candidate and all 9 tiers: %#v", models)
+	}
+
+	adminModels, err := s.AdminLogicalModels(&model.User{ID: "admin", Role: model.UserRoleAdmin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(adminModels) != 1 || len(adminModels[0].PriceTiers) != 9 {
+		t.Fatalf("admin projection should expose the route's 9 configured tiers: %#v", adminModels)
+	}
+
+	catalog, err := s.cloudAgentModelList(&intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var logicalEntry map[string]any
+	for _, entry := range catalog.(map[string]any)["models"].([]map[string]any) {
+		if entry["selection"].(map[string]any)["logicalModelId"] == imageModel.ID {
+			logicalEntry = entry
+			break
+		}
+	}
+	if logicalEntry == nil || len(logicalEntry["priceTiers"].([]PublicLogicalModelPriceTier)) != 9 {
+		t.Fatalf("agent catalog did not expose the logical candidate with 9 price tiers: %#v", logicalEntry)
+	}
+	defaultRoute, err := s.ResolveLogicalModel(imageModel.ID, intent)
+	if err != nil || defaultRoute.PriceTier == nil {
+		t.Fatalf("declared model defaults must resolve a priced specification: %v", err)
+	}
+	selectedIntent := ModelRequestIntent{Capability: "image", Inputs: map[string]int{}, Options: map[string]any{"imageResolution": "4k", "quality": "max"}}
+	routed, err := s.ResolveLogicalModel(imageModel.ID, selectedIntent)
+	if err != nil || routed.PriceTier == nil || routed.PriceTier.ID != "agent-image-4k-max" {
+		t.Fatalf("complete selection should resolve only its exact price tier: routed=%#v error=%v", routed, err)
+	}
+}
+
+func TestCloudAgentImageCatalogRejectsUnpricedExplicitCombination(t *testing.T) {
+	s, db, _, _ := creationTestService(t)
+	imageModel := seedAgentLogicalImageModel(t, s, db)
+	if err := db.Where("channel_model_id = ? AND selector_json = ?", "agent-image-cm", "{\"imageResolution\":\"4k\",\"quality\":\"max\"}").Delete(&model.ChannelModelPriceTier{}).Error; err != nil {
+		t.Fatal(err)
+	}
+	s.invalidateRouteCatalog()
+	intent := ModelRequestIntent{Capability: "image", Inputs: map[string]int{}, Options: map[string]any{"imageResolution": "4k", "quality": "max"}}
+
+	models, err := s.PublicLogicalModels(&intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(models) != 1 || models[0].ID != imageModel.ID || models[0].Available {
+		t.Fatalf("supported but unpriced explicit combination must not be available: %#v", models)
+	}
+	catalog, err := s.cloudAgentModelList(&intent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(catalog)
+	if strings.Contains(string(encoded), "\"logicalModelId\":\""+imageModel.ID+"\"") {
+		t.Fatalf("agent exposed a model with no price tier for the explicit combination: %s", encoded)
+	}
+	if _, err := s.ResolveLogicalModel(imageModel.ID, intent); err == nil {
+		t.Fatal("strict routing accepted an explicitly unpriced combination")
+	}
+}
+
+func seedAgentLogicalImageModel(t *testing.T, s *Service, db *gorm.DB) model.LogicalModel {
+	t.Helper()
+	if err := db.Create(&model.SystemSetting{Key: featureAvailabilitySettingKey, ValueJSON: "{\"frontendModelsEnabled\":true}"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Create(&model.ModelChannel{ID: "agent-image-channel", Scope: model.ChannelScopeSystem, Enabled: true, Name: "Agent image test"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	config := DefaultModelCapabilityConfigForModel(string(model.ChannelInterfaceOpenAIImage), "gpt-image-2.5-sunburst")
+	config.Image.Resolution = ImageResolutionConfig{Supported: true, Values: []string{"1k", "2k", "4k"}, Default: "1k"}
+	config.Image.Quality = ImageQualityConfig{Supported: true, Values: []string{"medium", "high", "max"}, Default: "medium"}
+	if err := db.Create(&model.ChannelModel{ID: "agent-image-cm", ChannelID: "agent-image-channel", ModelKey: "gpt-image-2.5-sunburst", DisplayName: "Sunburst", Capability: "image", Protocol: model.ChannelInterfaceOpenAIImage, CapabilityConfigJSON: mustEncodeModelCapabilityConfig(t, config), BillingMode: "fixed_request", PriceConfigured: true, Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, resolution := range []string{"1k", "2k", "4k"} {
+		for _, quality := range []string{"medium", "high", "max"} {
+			selector := fmt.Sprintf("{\"imageResolution\":%q,\"quality\":%q}", resolution, quality)
+			if err := db.Create(&model.ChannelModelPriceTier{ID: "agent-image-" + resolution + "-" + quality, ChannelModelID: "agent-image-cm", SelectorKey: selector, SelectorJSON: selector, BillingMode: "fixed_request", UnitPriceMicrocredits: 100, PriceConfigured: true, Enabled: true}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	spec, err := CapabilitySpecFromModelCapabilityConfig(config, "image")
+	if err != nil {
+		t.Fatal(err)
+	}
+	specJSON, err := json.Marshal(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	imageModel := model.LogicalModel{ID: "agent-sunburst", Code: "agent-sunburst", Name: "Sunburst", Capability: "image", Enabled: true, ActiveRevisionID: "agent-sunburst-revision", PricePolicy: "channel", BillingMode: "fixed_request"}
+	revision := model.LogicalModelRevision{ID: imageModel.ActiveRevisionID, LogicalModelID: imageModel.ID, Version: 1, CapabilitySpecJSON: string(specJSON), DefaultOptionsJSON: "{}"}
+	route := model.LogicalModelRoute{ID: "agent-sunburst-route", LogicalModelRevisionID: revision.ID, ChannelModelID: "agent-image-cm", Enabled: true, Weight: 1}
+	for _, row := range []any{&imageModel, &revision, &route} {
+		if err := db.Create(row).Error; err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.invalidateRouteCatalog()
+	return imageModel
 }
 
 func TestCloudAgentMediaDraftReuseLifecycle(t *testing.T) {
@@ -900,7 +1081,8 @@ func TestCloudAgentCanvasUpdatesExistingVideoDraftThroughCapabilityContract(t *t
 	}
 	updated := updatedNodes["video-1789310237935-mmh3-baby-fullmoon"]
 	metadata := updated["metadata"].(map[string]any)
-	if updated["title"] != "满月庆祝视频草稿（舒缓呼吸感）" || metadata["composerContent"] != "下一版舒缓视频提示词" {
+	generationSpec := metadata["generationSpec"].(map[string]any)
+	if updated["title"] != "满月庆祝视频草稿（舒缓呼吸感）" || generationSpec["prompt"] != "下一版舒缓视频提示词" {
 		t.Fatalf("video draft was not updated: %#v", updated)
 	}
 	if metadata["prompt"] != "原始已提交提示词" || metadata["status"] != "error" || metadata["referenceIssue"] != "参考资产尚未准备完成" {

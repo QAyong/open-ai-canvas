@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"infinite-canvas/backend/internal/model"
+	"yingce/backend/internal/model"
 )
 
 func TestCloudAgentContinuationReplySplitsFactsFromAssistantText(t *testing.T) {
@@ -192,9 +192,13 @@ func TestCloudAgentContinuationSourceNeverReachesUpstreamBody(t *testing.T) {
 	if got := stringField(canonical.Messages[0], cloudAgentContextSourceKey); got != "continuation" {
 		t.Fatalf("canonical 丢了来源标记：%q", got)
 	}
+	responses, err := canonicalAgentResponsesBody(&canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, body := range []map[string]any{
 		canonicalAgentChatBody(&canonical, false),
-		canonicalAgentResponsesBody(&canonical),
+		responses,
 		canonicalAgentGeminiBody(&canonical),
 		claudeAgentBody(canonicalAgentChatBody(&canonical, true)),
 	} {

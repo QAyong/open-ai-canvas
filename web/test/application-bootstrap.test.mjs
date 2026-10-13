@@ -1,12 +1,13 @@
 import { expect, test } from "bun:test";
 import { runInNewContext } from "node:vm";
+import { fileURLToPath } from "node:url";
 
-import { isIsolatedDirectorRepro } from "../src/lib/dev-repro";
+import { isIsolatedPrevisRepro } from "../src/lib/dev-repro";
 
 // Execute the real entry point; replace only its font, network and UI side effects.
 async function prepareEntry(dev, pathname) {
     const build = await Bun.build({
-        entrypoints: [new URL("../src/main.tsx", import.meta.url).pathname],
+        entrypoints: [fileURLToPath(new URL("../src/main.tsx", import.meta.url))],
         target: "browser",
         format: "iife",
         define: { "import.meta.env.DEV": JSON.stringify(dev) },
@@ -39,18 +40,18 @@ async function prepareEntry(dev, pathname) {
     return { events, resolveAppearance, loaded };
 }
 
-test("DEV director lab loads without calling the appearance backend", async () => {
-    const entry = await prepareEntry(true, "/dev/director-repro");
+test("DEV previs lab loads without calling the appearance backend", async () => {
+    const entry = await prepareEntry(true, "/dev/previs-repro");
     await entry.loaded;
     expect(entry.events).toEqual(["./application"]);
 });
 
 for (const [dev, pathname] of [
-    [false, "/dev/director-repro"],
+    [false, "/dev/previs-repro"],
     [true, "/login"],
     [false, "/login"],
-    [true, "/dev/director-repro/"],
-    [true, "/dev/director-repro-other"],
+    [true, "/dev/previs-repro/"],
+    [true, "/dev/previs-repro-other"],
 ]) {
     test(`appearance loads in parallel with normal startup: dev=${dev} path=${pathname}`, async () => {
         const entry = await prepareEntry(dev, pathname);
@@ -64,14 +65,15 @@ for (const pathname of ["/welcome", "/welcome/"]) {
     test(`public film entry remains independent: ${pathname}`, async () => {
         const entry = await prepareEntry(false, pathname);
         await entry.loaded;
-        expect(entry.events).toEqual(["./welcome-application"]);
+        // 欢迎页沿用站点外观（#683），但外观请求不阻塞欢迎页入口加载。
+        expect(entry.events).toEqual(["appearance", "./welcome-application"]);
     });
 }
 
 test("provider isolation shares the exact DEV-only route boundary", () => {
-    expect(isIsolatedDirectorRepro(true, "/dev/director-repro")).toBe(true);
-    expect(isIsolatedDirectorRepro(false, "/dev/director-repro")).toBe(false);
-    for (const path of ["/", "/login", "/dev/director-repro/", "/dev/director-repro-other"]) {
-        expect(isIsolatedDirectorRepro(true, path)).toBe(false);
+    expect(isIsolatedPrevisRepro(true, "/dev/previs-repro")).toBe(true);
+    expect(isIsolatedPrevisRepro(false, "/dev/previs-repro")).toBe(false);
+    for (const path of ["/", "/login", "/dev/previs-repro/", "/dev/previs-repro-other"]) {
+        expect(isIsolatedPrevisRepro(true, path)).toBe(false);
     }
 });

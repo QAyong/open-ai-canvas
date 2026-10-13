@@ -4,9 +4,9 @@ import (
 	"net/http"
 	"time"
 
-	"infinite-canvas/backend/internal/kernel"
-	"infinite-canvas/backend/internal/model"
-	"infinite-canvas/backend/internal/storage"
+	"yingce/backend/internal/kernel"
+	"yingce/backend/internal/model"
+	"yingce/backend/internal/storage"
 )
 
 type AccessPurpose string
@@ -140,6 +140,17 @@ func ResolveAccess(resource *model.Resource, setting storage.Settings, options A
 	}
 	if resource.Provider == "local" {
 		access.Delivery = DeliveryLocal
+	} else if !InlineMediaType(resource.MimeType) {
+		// A redirect cannot enforce our attachment and sandbox response headers.
+		access.Delivery = DeliveryProxy
+		access.FallbackReason = "attachment_required"
+	} else if options.Purpose == PurposeDownload && setting.Delivery.CDNAuthMode == "public" && storage.CDNEnabled(setting) {
+		// Public COS/OSS CDN deployments can forward this response override to
+		// their origin. Keeping it on the download-only URL lets images and
+		// videos continue to use their normal inline CDN URL for display.
+		access.URL, err = storage.PublicCDNObjectDownloadURL(setting, resource.ObjectKey, options.DownloadName)
+		access.Delivery = DeliveryCDN
+		access.ExpiresAt = nil
 	} else if options.Purpose == PurposeDownload {
 		// Cross-origin `a[download]` is only advisory. A real browser download must
 		// therefore be enforced by the object store response itself. Downloads use
