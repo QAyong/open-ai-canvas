@@ -15922,9 +15922,10 @@ html:not(.dark) .creation-home .creation-user-message-copy-wrap { box-shadow: 0 
 .app-user-workspace .app-workspace-sidebar-checkin.is-collapsed {
     width: 48px;
     height: 48px;
+    justify-content: center;
     padding: 0;
     border-radius: 12px;
-    font-size: 13px;
+    box-shadow: none;
 }
 
 .dark .app-user-workspace .app-workspace-sidebar-checkin {
@@ -15941,6 +15942,7 @@ html:not(.dark) .creation-home .creation-user-message-copy-wrap { box-shadow: 0 
 .dark .app-user-workspace .app-workspace-sidebar-checkin.is-collapsed {
     background: #171717;
     color: #fff;
+    box-shadow: none;
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -18419,16 +18421,16 @@ html:not(.dark) .creation-home .creation-user-message-copy-wrap { box-shadow: 0 
     border-radius: 22px !important;
 }
 .app-user-workspace .creation-launchpad .creation-chat-composer.is-empty .creation-chat-writing-surface {
-    min-height: 152px !important;
-    padding: 22px 24px 10px !important;
+    min-height: 96px !important;
+    padding: var(--space-4) var(--space-5) var(--space-2) !important;
 }
 .app-user-workspace .creation-launchpad .creation-chat-composer.is-empty .creation-chat-mention-editor {
-    min-height: 64px !important;
+    min-height: 48px !important;
     font-size: 16px !important;
 }
 .app-user-workspace .creation-launchpad .creation-chat-dock {
-    min-height: 64px !important;
-    padding: 8px 16px 16px !important;
+    min-height: 52px !important;
+    padding: var(--space-2) var(--space-4) var(--space-3) !important;
     border-top: 0 !important;
 }
 .app-user-workspace .creation-launchpad .creation-chat-controls .creation-chat-control {
@@ -18464,9 +18466,9 @@ html:not(.dark) .creation-home .creation-user-message-copy-wrap { box-shadow: 0 
 .app-user-workspace .creation-empty-suggest .suggest-card {
     position: relative;
     isolation: isolate;
-    min-height: 80px !important;
+    min-height: 64px !important;
     margin: 0 !important;
-    padding: 12px !important;
+    padding: var(--space-2) var(--space-3) !important;
     border: 1px solid transparent !important;
     border-radius: var(--user-radius-card) !important;
     background: transparent !important;
@@ -18627,7 +18629,7 @@ html:not(.dark) .creation-home .creation-user-message-copy-wrap { box-shadow: 0 
     .app-user-workspace .creation-chat-mention-editor { min-height: 120px !important; font-size: 17px !important; }
     .app-user-workspace .creation-empty-suggest { grid-template-columns: repeat(2, minmax(0, 1fr)) !important; }
     .app-user-workspace .creation-empty-suggest .creation-hero-prompt,
-    .app-user-workspace .creation-empty-suggest .suggest-card { min-height: 80px !important; }
+    .app-user-workspace .creation-empty-suggest .suggest-card { min-height: 64px !important; }
     .app-user-workspace .creation-featured-works { margin-top: 48px !important; }
 }
 @media (prefers-reduced-motion: reduce) {
