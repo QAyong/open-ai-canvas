@@ -149,6 +149,11 @@ func (s *Service) enqueueCloudAgentTask(run *model.CloudAgentExecution, state *c
 		if err := createTaskWithStorageQuotaRepository(repo, task, prepare.Order, policy); err != nil {
 			return err
 		}
+		if media == nil {
+			if err := repo.BumpAgentLessonInjected(run.UserID, cloudAgentInjectedMemoryIDs(input)); err != nil {
+				return err
+			}
+		}
 		if media != nil && prepared != nil {
 			if approvalID != "" {
 				if err := repo.TransferCloudAgentResourceLeases(run.UserID, approvalID, "task:"+task.ID, task.ID, prepared.Quote.ExpiresAt); err != nil {
@@ -477,15 +482,21 @@ func (s *Service) DecideCloudAgentApproval(userID, id, approvalID, decision, rea
 				// invocation. Make it terminal before the scheduler can advance the
 				// pending call; no tool result, canvas mutation, generation task or
 				// follow-up model request may be produced from this decision.
+				rejectionText := "已拒绝本次操作，本次操作未执行。"
+				rejectionEndText := "本轮已结束：已拒绝本次操作"
+				if state.Approval != nil && cloudAgentMediaTool(state.Approval.Call.Function.Name) {
+					rejectionText = "已拒绝本次生成，草稿节点仍保留在画布中；未提交任务、未产生扣费。你可以继续编辑后重新申请。"
+					rejectionEndText = "本轮已结束：已拒绝本次生成"
+				}
 				current.Status = "rejected"
 				current.FailureMessage = ""
 				state.Approval = nil
-				cloudAgentDropInterjections(id, "本轮已结束：已拒绝本次生成", &state)
+				cloudAgentDropInterjections(id, rejectionEndText, &state)
 				state.event(id, "approval_decided", map[string]any{
 					"approvalId": approvalID,
 					"decision":   decision,
 					"reason":     reason,
-					"text":       "已拒绝本次生成，草稿节点仍保留在画布中；未提交任务、未产生扣费。你可以继续编辑后重新申请。",
+					"text":       rejectionText,
 				})
 				if err := repo.ReleaseCloudAgentResourceLeases(userID, approvalID); err != nil {
 					return err
