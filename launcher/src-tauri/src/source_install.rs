@@ -273,14 +273,26 @@ impl Builder {
     }
 
     fn get(&self, url: &str, max: u64) -> Result<Vec<u8>> {
-        let selected = dependency_url(url, self.mirror)?;
-        let response = self.client.get(&selected).send().context("连接工具下载站失败；可检查网络或切换镜像模式")?;
-        ensure!(response.status().is_success(), "官方工具下载返回 HTTP {}", response.status().as_u16());
-        ensure!(response.content_length().unwrap_or(0) <= max, "工具下载超过大小上限");
-        let mut bytes = Vec::new();
-        response.take(max + 1).read_to_end(&mut bytes).context("读取官方工具下载失败")?;
-        ensure!(bytes.len() as u64 <= max, "工具下载超过大小上限");
-        Ok(bytes)
+        let mut errors = Vec::new();
+        for selected in dependency_candidates(url, self.mirror)? {
+            let attempt = (|| -> Result<Vec<u8>> {
+                let response = self.client.get(&selected).send().context("连接工具下载站失败")?;
+                ensure!(response.status().is_success(), "下载返回 HTTP {}", response.status().as_u16());
+                ensure!(response.content_length().unwrap_or(0) <= max, "工具下载超过大小上限");
+                let mut bytes = Vec::new();
+                response.take(max + 1).read_to_end(&mut bytes).context("读取工具下载失败")?;
+                ensure!(bytes.len() as u64 <= max, "工具下载超过大小上限");
+                Ok(bytes)
+            })();
+            match attempt {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) => {
+                    self.log.line(&format!("[toolchains] source failed, trying the next one: {error:#}"));
+                    errors.push(format!("{error:#}"));
+                }
+            }
+        }
+        bail!("工具下载失败（已尝试全部来源）：{}；可检查网络或在设置中切换镜像模式", errors.join("；"))
     }
 
     fn archive(&self, url: &str, sha: &str, name: &str) -> Result<PathBuf> {
@@ -512,6 +524,19 @@ fn platform() -> Result<(&'static str, &'static str)> {
     let arch = match env::consts::ARCH { "x86_64" => "amd64", "aarch64" => "arm64", _ => bail!("源码安装仅支持 x64 与 ARM64") };
     Ok((os, arch))
 }
+/// Every source to try for a download, best first. GitHub assets can go through any approved
+    /// public proxy; Go and Node have dedicated mirrors.
+fn dependency_candidates(url: &str, mirror: bool) -> Result<Vec<String>> {
+    let first = dependency_url(url, mirror)?;
+    let mut all = vec![first];
+    if mirror && matches!(url::Url::parse(url)?.host_str(), Some("github.com" | "api.github.com")) {
+        for host in crate::core::PUBLIC_MIRRORS {
+            let candidate = format!("https://{host}/{url}");
+            if !all.contains(&candidate) { all.push(candidate); }
+        }
+    }
+    Ok(all)
+}
 fn dependency_url(url: &str, mirror: bool) -> Result<String> {
     let parsed = url::Url::parse(url)?;
     ensure!(parsed.scheme() == "https", "工具下载必须使用 HTTPS");
@@ -679,6 +704,11 @@ mod tests {
     #[test]
     fn dependency_mirrors_are_opt_in() {
         let github = "https://api.github.com/repos/oven-sh/bun/releases/tags/bun-v1.3.9";
+        let all = dependency_candidates(github, true).unwrap();
+        assert_eq!(all.len(), 3);
+        assert!(all[0].starts_with("https://gh-proxy.com/") && all.iter().any(|u| u.starts_with("https://ghfast.top/")) && all.iter().any(|u| u.starts_with("https://ghproxy.net/")));
+        assert_eq!(dependency_candidates(github, false).unwrap(), vec![github.to_string()]);
+        assert_eq!(dependency_candidates("https://go.dev/dl/go1.26.7.windows-amd64.zip", true).unwrap().len(), 1);
         assert_eq!(dependency_url(github, false).unwrap(), github);
         assert_eq!(dependency_url(github, true).unwrap(), format!("https://gh-proxy.com/{github}"));
         assert_eq!(dependency_url("https://nodejs.org/dist/index.json", true).unwrap(), "https://npmmirror.com/mirrors/node/index.json");

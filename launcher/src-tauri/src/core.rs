@@ -22,6 +22,7 @@ use url::Url;
 const MAX_MANIFEST: u64 = 2 * 1024 * 1024;
 const MAX_STATE: u64 = 64 * 1024 * 1024;
 const MAX_ARCHIVE: u64 = 4 * 1024 * 1024 * 1024;
+pub const PUBLIC_MIRRORS: [&str; 3] = ["gh-proxy.com", "ghfast.top", "ghproxy.net"];
 const MAX_EXPANDED: u64 = 12 * 1024 * 1024 * 1024;
 const MAX_FILES: usize = 100_000;
 const MAX_LOG: u64 = 8 * 1024 * 1024;
@@ -850,26 +851,33 @@ fn public_sources(config: &Config, target: &str) -> Result<Vec<Url>> {
             && ["api.github.com", "github.com"].contains(&direct.host_str().unwrap_or("")),
         "Unsupported public repository host"
     );
-    let mirror = || -> Result<Url> {
-        let prefix = source_url(
+    // The chosen proxy goes first; the other approved proxies are fallbacks because any one of
+    // these free public services is often down or rate limited.
+    let mirrors = || -> Result<Vec<Url>> {
+        let selected = source_url(
             config
                 .mirror_url
                 .as_deref()
                 .unwrap_or("https://gh-proxy.com/"),
         )?;
         ensure!(
-            ["ghproxy.net", "ghfast.top", "gh-proxy.com"]
-                .contains(&prefix.host_str().unwrap_or(""))
-                && prefix.path() == "/"
-                && prefix.port().is_none(),
+            PUBLIC_MIRRORS.contains(&selected.host_str().unwrap_or(""))
+                && selected.path() == "/"
+                && selected.port().is_none(),
             "请选择已支持的 GitHub 公共镜像"
         );
-        Url::parse(&format!("{}{target}", prefix.as_str())).map_err(Into::into)
+        let chosen = selected.host_str().unwrap_or("").to_owned();
+        let mut hosts = vec![chosen.clone()];
+        hosts.extend(PUBLIC_MIRRORS.iter().map(|h| h.to_string()).filter(|h| *h != chosen));
+        hosts
+            .iter()
+            .map(|host| Url::parse(&format!("https://{host}/{target}")).map_err(Into::into))
+            .collect()
     };
     match config.source_mode {
         SourceMode::Official => Ok(vec![direct]),
-        SourceMode::Mirror => Ok(vec![mirror()?]),
-        SourceMode::Auto => Ok(vec![direct, mirror()?]),
+        SourceMode::Mirror => mirrors(),
+        SourceMode::Auto => Ok(std::iter::once(direct).chain(mirrors()?).collect()),
     }
 }
 fn manifest_from_public(release: &PublicRelease) -> Result<ReleaseManifest> {
@@ -1524,7 +1532,8 @@ impl Prepare {
             if downloaded { break; }
             let origin = url.to_string();
             let result = (|| -> Result<()> {
-                let response = self.client.get(url).timeout(Duration::from_secs(600)).send()?.error_for_status()?;
+                // A free proxy may stream a ~300 MB archive slowly; allow it before trying the next source.
+                let response = self.client.get(url).timeout(Duration::from_secs(1800)).send()?.error_for_status()?;
                 ensure!(response.content_length().unwrap_or(0) <= MAX_ARCHIVE, "源码包过大");
                 let mut file = OpenOptions::new().create_new(true).write(true).open(&archive)?;
                 let mut response = response.take(MAX_ARCHIVE + 1);
@@ -1579,10 +1588,15 @@ mod tests {
         assert_eq!(direct[0].as_str(), DEFAULT_API_ROOT);
         config.source_mode = SourceMode::Mirror;
         let mirrors = public_sources(&config, DEFAULT_API_ROOT).unwrap();
-        assert_eq!(mirrors.len(), 1);
         assert_eq!(mirrors[0].host_str(), Some("gh-proxy.com"));
+        config.mirror_url = Some("https://ghproxy.net/".into());
+        let order: Vec<_> = public_sources(&config, DEFAULT_API_ROOT).unwrap().iter().map(|u| u.host_str().unwrap().to_owned()).collect();
+        assert_eq!(order, ["ghproxy.net", "gh-proxy.com", "ghfast.top"], "selected proxy first, the others as fallbacks");
         config.source_mode = SourceMode::Auto;
-        assert_eq!(public_sources(&config, DEFAULT_API_ROOT).unwrap().len(), 2);
+        let auto = public_sources(&config, DEFAULT_API_ROOT).unwrap();
+        assert_eq!(auto.len(), 4);
+        assert_eq!(auto[0].host_str(), Some("api.github.com"));
+        config.mirror_url = Some("https://gh-proxy.com/".into());
         config.mirror_url = Some("https://unapproved.example/".into());
         assert!(public_sources(&config, DEFAULT_API_ROOT).is_err());
     }
