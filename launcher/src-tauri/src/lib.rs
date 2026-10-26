@@ -1,4 +1,5 @@
 mod core;
+mod incremental;
 mod public_release;
 mod source_install;
 mod source_adapt;
@@ -38,6 +39,18 @@ async fn check_updates(state: tauri::State<'_, Shared>) -> Result<UpdateInfo, St
 #[tauri::command]
 async fn install(state: tauri::State<'_, Shared>) -> Result<Status, String> {
     execute(state, |m| m.install()).await
+}
+#[tauri::command]
+async fn switch_prepared(state: tauri::State<'_, Shared>) -> Result<Status, String> {
+    execute(state, |m| m.switch_prepared()).await
+}
+/// Builds the newest commit without stopping the service; the manager lock is not held while it runs.
+#[tauri::command]
+async fn prepare_update(state: tauri::State<'_, Shared>) -> Result<String, String> {
+    let manager = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || core::prepare_in_background(&manager).map_err(|e| format!("{e:#}")))
+        .await
+        .map_err(|e| e.to_string())?
 }
 #[tauri::command]
 async fn start(state: tauri::State<'_, Shared>) -> Result<Status, String> {
@@ -80,7 +93,19 @@ pub fn run() {
             // Construct the blocking HTTP client outside the async runtime.
             let manager = Manager::new(root.clone())?;
             app.manage(OperationRoot(root));
-            app.manage(Arc::new(Mutex::new(manager)));
+            let shared: Shared = Arc::new(Mutex::new(manager));
+            app.manage(shared.clone());
+            // Scheduled background check: builds the new version while the service keeps running.
+            std::thread::spawn(move || loop {
+                std::thread::sleep(std::time::Duration::from_secs(60));
+                let due = match shared.lock() {
+                    Ok(mut manager) => manager.claim_scheduled(&chrono::Local::now()),
+                    Err(_) => return,
+                };
+                if due {
+                    let _ = core::prepare_in_background(&shared);
+                }
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -88,6 +113,8 @@ pub fn run() {
             configure,
             check_updates,
             install,
+            switch_prepared,
+            prepare_update,
             start,
             stop,
             open_browser,

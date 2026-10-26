@@ -10,7 +10,7 @@
 - 构建真实后端、Vite 网页、Agent 生产依赖、配套 Node 和官方插件包。网关在启动器构建时编译并嵌入应用，安装时释放。
 - 工作台展示安装/下载/构建/验证阶段进度和受控日志；百分比是阶段进度，不是精确剩余时间。
 - 更新必须显式先停止服务。持旧数据锁复制完整数据到新的 `data-versions/`，候选后端仅在副本上执行启动时自动迁移，精确核对版本、提交及就绪后才持久化新指针。旧版本和原数据保留，不静默覆盖，也不承诺已完成自动灾难恢复。
-- 默认官方直连；设置保留三个第三方 GitHub 代理候选：`ghproxy.net`、`ghfast.top`、`gh-proxy.com`。详情见[镜像说明](docs/mirror-options.md)。
+- 默认使用镜像下载（`gh-proxy.com`，Go 依赖 `goproxy.cn`，npm 依赖 `registry.npmmirror.com`），可在设置中改为官方直连或“按需”；设置保留三个第三方 GitHub 代理候选：`ghproxy.net`、`ghfast.top`、`gh-proxy.com`。详情见[镜像说明](docs/mirror-options.md)。
 
 固定浏览器地址默认 `http://127.0.0.1:37890`；端口冲突不自动换端口，改变端口会改变浏览器缓存作用域。网关仅回环监听，保留业务登录、权限和 SSRF 校验。
 

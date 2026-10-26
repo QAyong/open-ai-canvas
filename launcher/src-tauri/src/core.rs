@@ -1,5 +1,5 @@
 //! Independent source builds of the fixed public upstream repository.
-use crate::{public_release::{self, PublicRelease, DEFAULT_API_ROOT, REPOSITORY_URL}, source_install};
+use crate::{incremental, public_release::{self, PublicRelease, DEFAULT_API_ROOT, REPOSITORY_URL}, source_install};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use fs2::FileExt;
 use reqwest::blocking::Client;
@@ -12,6 +12,7 @@ use std::{
     net::TcpListener,
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
+    sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -25,7 +26,7 @@ const MAX_EXPANDED: u64 = 12 * 1024 * 1024 * 1024;
 const MAX_FILES: usize = 100_000;
 const MAX_LOG: u64 = 8 * 1024 * 1024;
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum SourceMode {
     #[default]
@@ -34,7 +35,29 @@ pub enum SourceMode {
     Mirror,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Schedule {
+    Daily,
+    Interval,
+}
+/// Background "pull and prepare" schedule. It only builds the new version; switching stays manual.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AutoUpdate {
+    pub enabled: bool,
+    pub schedule: Schedule,
+    /// Local `HH:MM`, used by the daily schedule.
+    pub time: String,
+    /// Hours between checks, used by the interval schedule.
+    pub interval_hours: u32,
+}
+impl Default for AutoUpdate {
+    fn default() -> Self {
+        Self { enabled: false, schedule: Schedule::Daily, time: "03:00".into(), interval_hours: 24 }
+    }
+}
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Config {
     pub source_mode: SourceMode,
@@ -42,6 +65,8 @@ pub struct Config {
     pub mirror_url: Option<String>,
     pub port: u16,
     pub open_browser: bool,
+    #[serde(default)]
+    pub auto_update: AutoUpdate,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -51,6 +76,7 @@ impl Default for Config {
             mirror_url: Some("https://gh-proxy.com/".into()),
             port: 37890,
             open_browser: true,
+            auto_update: AutoUpdate::default(),
         }
     }
 }
@@ -105,6 +131,29 @@ pub struct UpdateInfo {
     pub can_install: bool,
     pub reason: Option<String>,
 }
+/// A fully built new version waiting for the user to stop the service and switch to it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedRelease {
+    pub version: String,
+    pub commit: String,
+    pub sequence: u64,
+    pub release_id: String,
+    pub data_schema: u32,
+    pub files: BTreeMap<String, String>,
+}
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreparedInfo {
+    pub version: String,
+    pub commit: String,
+}
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoRecord {
+    pub last_check: i64,
+    pub last_result: String,
+}
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -116,6 +165,9 @@ pub struct Status {
     pub platform: String,
     pub repository_url: String,
     pub recovery_required: bool,
+    pub preparing: bool,
+    pub prepared: Option<PreparedInfo>,
+    pub auto_record: AutoRecord,
 }
 #[derive(Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -127,6 +179,10 @@ struct State {
     manifest_digest: Option<String>,
     #[serde(default)]
     files: BTreeMap<String, String>,
+    #[serde(default)]
+    prepared: Option<PreparedRelease>,
+    #[serde(default)]
+    auto: AutoRecord,
 }
 pub struct Manager {
     root: PathBuf,
@@ -135,6 +191,7 @@ pub struct Manager {
     child: Option<Child>,
     shutdown_token: Option<String>,
     pending_restore: Option<(Option<InstalledRelease>, BTreeMap<String, String>)>,
+    busy: Arc<AtomicBool>,
     _lock: File,
     #[cfg(windows)]
     job: Option<Job>,
@@ -169,6 +226,12 @@ impl Manager {
             .open(root.join("state/manager.lock"))?;
         lock.try_lock_exclusive()
             .context("Another launcher owns this managed installation")?;
+        // Staging only holds interrupted work; the exclusive lock above means nothing else uses it.
+        if let Ok(entries) = fs::read_dir(root.join("staging")) {
+            for entry in entries.flatten() {
+                let _ = fs::remove_dir_all(entry.path());
+            }
+        }
         let state_path = root.join("state/state.json");
         let state: State = if state_path.exists() {
             reject_link(&state_path)?;
@@ -204,6 +267,7 @@ impl Manager {
                         "release-assets.githubusercontent.com",
                         "objects.githubusercontent.com",
                         "codeload.github.com",
+                        "raw.githubusercontent.com",
                     ]
                     .contains(&url.host_str().unwrap_or(""))
                 };
@@ -228,6 +292,7 @@ impl Manager {
             child: None,
             shutdown_token: None,
             pending_restore: None,
+            busy: Arc::new(AtomicBool::new(false)),
             _lock: lock,
             #[cfg(windows)]
             job: None,
@@ -252,15 +317,20 @@ impl Manager {
             platform: format!("{}-{}", platform()?.0, platform()?.1),
             repository_url: REPOSITORY_URL.into(),
             recovery_required: self.pending_restore.is_some(),
+            preparing: self.busy.load(Ordering::SeqCst),
+            prepared: self.state.prepared.as_ref().map(|p| PreparedInfo { version: p.version.clone(), commit: p.commit.clone() }),
+            auto_record: self.state.auto.clone(),
         })
     }
     pub fn configure(&mut self, config: Config) -> Result<Status> {
         validate_config(&config)?;
+        let old = self.state.config.clone();
+        // The update schedule does not touch the running service, so it may change at any time.
+        let schedule_only = Config { auto_update: old.auto_update.clone(), ..config.clone() } == old;
         ensure!(
-            self.child.is_none(),
+            schedule_only || self.child.is_none(),
             "Stop the managed runtime before changing configuration"
         );
-        let old = self.state.config.clone();
         self.state.config = config;
         if let Err(e) = self.save() {
             self.state.config = old;
@@ -284,50 +354,52 @@ impl Manager {
             reason,
         })
     }
-    fn fetch_manifest(&mut self) -> Result<(ReleaseManifest, String, Vec<u8>)> {
-        let mut errors = Vec::new();
-        for source in public_sources(&self.state.config, DEFAULT_API_ROOT)? {
-            match public_release::fetch_latest(&self.client, &source) {
-                Ok(release) => {
-                    let manifest = manifest_from_public(&release)?;
-                    let raw = serde_json::to_vec(&manifest)?;
-                    let origin = format!("{REPOSITORY_URL}/tree/{}", public_release::TRACKED_BRANCH);
-                    return Ok((manifest, origin, raw));
-                }
-                Err(error) => errors.push(format!("{error:#}")),
-            }
+    fn prepare_ctx(&self) -> Prepare {
+        Prepare {
+            root: self.root.clone(),
+            client: self.client.clone(),
+            config: self.state.config.clone(),
+            installed_commit: self.state.installed.as_ref().map(|i| i.commit.clone()),
+            prepared_commit: self.state.prepared.as_ref().map(|p| p.commit.clone()),
         }
-        bail!("无法读取公共仓库版本信息：{}", errors.join("；"))
     }
+    fn fetch_manifest(&mut self) -> Result<(ReleaseManifest, String, Vec<u8>)> {
+        self.prepare_ctx().fetch_manifest()
+    }
+    /// Prepares (unless already prepared) and switches to the latest commit. Requires a stopped service.
     pub fn install(&mut self) -> Result<Status> {
         ensure!(!self.status()?.running, "请先停止服务再安装或更新。");
+        let _busy = BusyGuard::acquire(&self.busy)?;
         progress(&self.root, "resolve", 2, "读取公共仓库版本")?;
         let (manifest, _, _) = self.fetch_manifest()?;
         if let Some(installed) = &self.state.installed {
             ensure!(installed.commit != manifest.commit, "当前源码版本已经安装，无需重复更新。");
             verify_files(&self.root.join("releases").join(&installed.release_id), &self.state.files)?;
         }
-        let id = format!("source-{}", manifest.commit);
-        let stage = self.root.join("staging").join(format!("{}-{}", id, SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()));
-        fs::create_dir(&stage)?;
-        progress(&self.root, "download", 5, "下载独立源码，不修改现有开发仓库")?;
-        let source = self.download_source(&manifest.commit, &stage)?;
-        let release = stage.join("release");
-        fs::create_dir(&release)?;
-        source_install::build_source(&source, &release, &self.root.join("cache"), &manifest.version, &manifest.commit,
-            !matches!(self.state.config.source_mode, SourceMode::Official), &self.root.join("logs/source-build.log"))?;
-        let executable = release.join(runtime_relative());
-        fs::create_dir_all(executable.parent().context("Missing runtime parent")?)?;
-        fs::write(&executable, include_bytes!(concat!(env!("OUT_DIR"), "/yingce-runtime.bin")))?;
-        #[cfg(unix)] {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))?;
+        let prepared = match self.state.prepared.clone().filter(|p| p.commit == manifest.commit) {
+            Some(prepared) => {
+                verify_files(&self.root.join("releases").join(&prepared.release_id), &prepared.files)?;
+                prepared
+            }
+            None => self.prepare_ctx().prepare(&manifest)?,
+        };
+        self.apply_prepared(prepared)
+    }
+    /// Switches to the version prepared in the background. Requires a stopped service.
+    pub fn switch_prepared(&mut self) -> Result<Status> {
+        ensure!(!self.status()?.running, "请先停止服务再切换到新版本。");
+        let _busy = BusyGuard::acquire(&self.busy)?;
+        let prepared = self.state.prepared.clone().context("没有已经准备好的新版本")?;
+        if let Some(installed) = &self.state.installed {
+            ensure!(installed.commit != prepared.commit, "该版本已经安装。");
+            verify_files(&self.root.join("releases").join(&installed.release_id), &self.state.files)?;
         }
-        progress(&self.root, "inventory", 84, "核对构建文件")?;
-        let files = hash_inventory(&release)?;
-        let target = self.root.join("releases").join(&id);
-        if target.exists() { fs::rename(&target, stage.join("previous-failed-build")).context("无法保留前次失败构建，请确认相关进程已经退出")?; }
-        fs::rename(&release, &target)?;
+        progress(&self.root, "integrity", 2, "核对已准备好的新版本文件")?;
+        verify_files(&self.root.join("releases").join(&prepared.release_id), &prepared.files)?;
+        self.apply_prepared(prepared)
+    }
+    fn apply_prepared(&mut self, prepared: PreparedRelease) -> Result<Status> {
+        let id = prepared.release_id.clone();
         let old_installed = self.state.installed.clone();
         let old_files = self.state.files.clone();
         let data_relative = format!("data-versions/{}-{}", id, SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis());
@@ -343,9 +415,9 @@ impl Manager {
         } else { fs::create_dir(&new_data)?; }
         // Migrations run against the copy only. Original data and the persisted version pointer remain untouched until readiness.
         self.pending_restore = Some((old_installed.clone(), old_files.clone()));
-        self.state.installed = Some(InstalledRelease { version: manifest.version.clone(), commit: manifest.commit.clone(),
-            sequence: manifest.sequence, release_id: id, data_schema: manifest.migration.data_schema, data_dir: Some(data_relative) });
-        self.state.files = files;
+        self.state.installed = Some(InstalledRelease { version: prepared.version.clone(), commit: prepared.commit.clone(),
+            sequence: prepared.sequence, release_id: id, data_schema: prepared.data_schema, data_dir: Some(data_relative) });
+        self.state.files = prepared.files.clone();
         let open_browser = self.state.config.open_browser;
         self.state.config.open_browser = false;
         progress(&self.root, "verify", 93, "启动真实后端并验证数据库和版本")?;
@@ -358,7 +430,9 @@ impl Manager {
             progress(&self.root, "failed", 93, "启动失败，原版本与原数据保持不变")?;
             return Err(error.context("启动验证失败，原版本与原数据未切换"));
         }
+        let waiting = self.state.prepared.take();
         if let Err(error) = self.save() {
+            self.state.prepared = waiting;
             self.stop()?;
             self.state.installed = old_installed;
             self.state.files = old_files;
@@ -366,71 +440,53 @@ impl Manager {
         }
         self.pending_restore = None;
         drop(data_lock);
-        let source_target = self.root.join("sources").join(&manifest.commit);
-        if !source_target.exists() { let _ = fs::rename(&source, &source_target); }
         progress(&self.root, "ready", 100, "源码安装完成，影策已经就绪")?;
-        self.note("Source build installed; readiness verified; prior version and original data retained")?;
+        self.note("Source build switched; readiness verified; prior version and original data retained")?;
         if open_browser && self.open_browser().is_err() { self.note("Service ready; default browser failed, use Open button")?; }
         self.status()
     }
-    fn download_source(&self, commit: &str, stage: &Path) -> Result<PathBuf> {
-        ensure!(commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()), "无效源码提交号");
-        let official = format!("{REPOSITORY_URL}/archive/{commit}.zip");
-        let archive = stage.join("source.zip");
-        let sources = public_sources(&self.state.config, &official)?;
-        let cached = self.root.join("cache").join(format!("source-{commit}.zip"));
-        let record = cached.with_extension("json");
-        let valid_cache = (|| -> Result<bool> {
-            let metadata: serde_json::Value = serde_json::from_slice(&read_bounded(File::open(&record)?, 4096)?)?;
-            if metadata["commit"].as_str() != Some(commit) || !sources.iter().any(|s| Some(s.as_str()) == metadata["source"].as_str()) { return Ok(false); }
-            Ok(metadata["sha256"].as_str() == Some(file_sha256(&cached)?.as_str()) && zip::ZipArchive::new(File::open(&cached)?).is_ok())
-        })().unwrap_or(false);
-        let mut downloaded = valid_cache;
-        if valid_cache { fs::copy(&cached, &archive)?; }
-        let mut errors = Vec::new();
-        for url in sources {
-            if downloaded { break; }
-            let origin = url.to_string();
-            let result = (|| -> Result<()> {
-                let response = self.client.get(url).timeout(Duration::from_secs(600)).send()?.error_for_status()?;
-                ensure!(response.content_length().unwrap_or(0) <= MAX_ARCHIVE, "源码包过大");
-                let mut file = OpenOptions::new().create_new(true).write(true).open(&archive)?;
-                let mut response = response.take(MAX_ARCHIVE + 1);
-                let mut count = 0u64;
-                let mut buffer = [0u8; 65536];
-                let mut last = Instant::now();
-                loop {
-                    let n = response.read(&mut buffer)?;
-                    if n == 0 { break; }
-                    count += n as u64;
-                    ensure!(count <= MAX_ARCHIVE, "源码包下载超过上限");
-                    file.write_all(&buffer[..n])?;
-                    if last.elapsed() >= Duration::from_secs(1) {
-                        progress(&self.root, "download", 5, &format!("正在下载独立源码，已接收 {} MiB", count / 1024 / 1024))?;
-                        last = Instant::now();
-                    }
-                }
-                ensure!(count > 0, "源码下载为空");
-                file.sync_all()?;
-                drop(file);
-                zip::ZipArchive::new(File::open(&archive)?).context("源码下载被截断或不是完整 ZIP")?;
-                fs::copy(&archive, &cached)?;
-                fs::write(&record, serde_json::to_vec(&serde_json::json!({"commit":commit,"source":origin,"sha256":file_sha256(&cached)?}))?)?;
-                Ok(())
-            })();
-            match result { Ok(()) => { downloaded = true; break; }, Err(error) => errors.push(format!("{error:#}")) }
-            if archive.exists() { fs::remove_file(&archive)?; }
+    /// Marks a scheduled background check as started when one is due and nothing else is running.
+    pub fn claim_scheduled<Tz: chrono::TimeZone>(&mut self, now: &chrono::DateTime<Tz>) -> bool {
+        if self.busy.load(Ordering::SeqCst) || !is_due(&self.state.config.auto_update, self.state.auto.last_check, now) {
+            return false;
         }
-        ensure!(downloaded, "源码下载失败，请检查网络或切换镜像：{}", errors.join("；"));
-        let unpacked = stage.join("checkout");
-        fs::create_dir(&unpacked)?;
-        extract_zip(&archive, &unpacked)?;
-        let entries = fs::read_dir(&unpacked)?.collect::<std::io::Result<Vec<_>>>()?;
-        ensure!(entries.len() == 1 && entries[0].file_type()?.is_dir(), "公共源码包目录结构不符合预期");
-        ensure!(entries[0].file_name() == std::ffi::OsStr::new(&format!("open-ai-canvas-{commit}")), "源码归档根目录与固定提交不匹配");
-        let source = entries[0].path();
-        ensure!(source.join("backend/go.mod").is_file() && source.join("web/bun.lock").is_file(), "源码缺少后端或锁文件");
-        Ok(source)
+        self.state.auto.last_check = now.timestamp();
+        self.state.auto.last_result = "正在后台检查更新".into();
+        self.save().is_ok()
+    }
+    fn finish_prepare(&mut self, outcome: Result<PrepareOutcome>) -> Result<String> {
+        let result = outcome.and_then(|outcome| match outcome {
+            PrepareOutcome::UpToDate => Ok("已经是最新版本".to_string()),
+            PrepareOutcome::AlreadyPrepared(version) => Ok(format!("新版本 {version} 已准备好，停止服务后即可切换")),
+            PrepareOutcome::Prepared(prepared) => {
+                let message = format!("新版本 {} 已准备好，停止服务后即可切换", prepared.version);
+                self.store_prepared(prepared)?;
+                Ok(message)
+            }
+        });
+        self.state.auto.last_check = SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs() as i64;
+        self.state.auto.last_result = match &result {
+            Ok(message) => message.clone(),
+            Err(error) => format!("失败：{error:#}"),
+        };
+        let _ = self.save();
+        let _ = self.note(&format!("[auto-update] {}", self.state.auto.last_result));
+        result
+    }
+    fn store_prepared(&mut self, prepared: PreparedRelease) -> Result<()> {
+        let new_id = prepared.release_id.clone();
+        let old = self.state.prepared.replace(prepared);
+        if let Err(error) = self.save() {
+            self.state.prepared = old;
+            return Err(error);
+        }
+        if let Some(old) = old {
+            let installed = self.state.installed.as_ref().map(|i| i.release_id.as_str());
+            if old.release_id != new_id && installed != Some(old.release_id.as_str()) {
+                let _ = fs::remove_dir_all(self.root.join("releases").join(&old.release_id));
+            }
+        }
+        Ok(())
     }
     fn installed_data(&self, installed: &InstalledRelease) -> Result<PathBuf> {
         match &installed.data_dir {
@@ -668,6 +724,78 @@ impl Drop for Manager {
         }
     }
 }
+/// Held while a prepare or install runs; exactly one such task may run at a time.
+struct BusyGuard(Arc<AtomicBool>);
+impl BusyGuard {
+    fn acquire(flag: &Arc<AtomicBool>) -> Result<Self> {
+        ensure!(
+            flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst).is_ok(),
+            "正在准备或安装更新，请等待当前任务完成。"
+        );
+        Ok(Self(flag.clone()))
+    }
+}
+impl Drop for BusyGuard {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
+enum PrepareOutcome {
+    UpToDate,
+    AlreadyPrepared(String),
+    Prepared(PreparedRelease),
+}
+/// Everything a prepare needs, cloned out of the manager so the long download and build run
+/// without holding the manager lock (the service can be started and stopped meanwhile).
+#[derive(Clone)]
+pub struct Prepare {
+    root: PathBuf,
+    client: Client,
+    config: Config,
+    installed_commit: Option<String>,
+    prepared_commit: Option<String>,
+}
+/// Downloads and builds the latest commit in the background. Never touches data or the running
+/// service; the finished build waits until the user switches to it.
+pub fn prepare_in_background(shared: &Arc<Mutex<Manager>>) -> Result<String> {
+    let (ctx, _busy) = {
+        let manager = shared.lock().map_err(|_| anyhow!("管理核心状态异常，请退出应用后重新打开。"))?;
+        let busy = BusyGuard::acquire(&manager.busy)?;
+        (manager.prepare_ctx(), busy)
+    };
+    let outcome = ctx.run_prepare();
+    let mut manager = shared.lock().map_err(|_| anyhow!("管理核心状态异常，请退出应用后重新打开。"))?;
+    manager.finish_prepare(outcome)
+}
+fn parse_time(value: &str) -> Option<(u32, u32)> {
+    let (hour, minute) = value.split_once(':')?;
+    if hour.len() != 2 || minute.len() != 2 {
+        return None;
+    }
+    let (hour, minute): (u32, u32) = (hour.parse().ok()?, minute.parse().ok()?);
+    (hour < 24 && minute < 60).then_some((hour, minute))
+}
+/// Whether a scheduled background check should start now. A missed daily slot runs as soon as the
+/// launcher is open again, at most once per slot.
+fn is_due<Tz: chrono::TimeZone>(config: &AutoUpdate, last_check: i64, now: &chrono::DateTime<Tz>) -> bool {
+    if !config.enabled {
+        return false;
+    }
+    match config.schedule {
+        Schedule::Interval => last_check == 0 || now.timestamp() - last_check >= i64::from(config.interval_hours.max(1)) * 3600,
+        Schedule::Daily => {
+            let Some((hour, minute)) = parse_time(&config.time) else { return false };
+            let Some(slot) = now
+                .date_naive()
+                .and_hms_opt(hour, minute, 0)
+                .and_then(|t| t.and_local_timezone(now.timezone()).earliest())
+            else {
+                return false;
+            };
+            *now >= slot && last_check < slot.timestamp()
+        }
+    }
+}
 fn serialize_state(state: &State) -> Result<Vec<u8>> {
     let bytes = serde_json::to_vec_pretty(state)?;
     ensure!(
@@ -822,6 +950,11 @@ fn validate_config(config: &Config) -> Result<()> {
     if let Some(url) = &config.mirror_url {
         source_url(url)?;
     }
+    ensure!(
+        (1..=168).contains(&config.auto_update.interval_hours),
+        "自动更新间隔应在 1 到 168 小时之间"
+    );
+    ensure!(parse_time(&config.auto_update.time).is_some(), "自动更新时间应为 HH:MM，例如 03:00");
     public_sources(config, DEFAULT_API_ROOT)?;
     Ok(())
 }
@@ -1223,6 +1356,216 @@ impl Drop for Job {
     }
 }
 
+impl Prepare {
+    fn run_prepare(&self) -> Result<PrepareOutcome> {
+        progress(&self.root, "resolve", 2, "读取公共仓库版本")?;
+        let (manifest, _, _) = self.fetch_manifest()?;
+        if self.installed_commit.as_deref() == Some(manifest.commit.as_str()) {
+            return Ok(PrepareOutcome::UpToDate);
+        }
+        if self.prepared_commit.as_deref() == Some(manifest.commit.as_str()) {
+            return Ok(PrepareOutcome::AlreadyPrepared(manifest.version));
+        }
+        self.prepare(&manifest).map(PrepareOutcome::Prepared)
+    }
+    fn fetch_manifest(&self) -> Result<(ReleaseManifest, String, Vec<u8>)> {
+        let mut errors = Vec::new();
+        for source in public_sources(&self.config, DEFAULT_API_ROOT)? {
+            match public_release::fetch_latest(&self.client, &source) {
+                Ok(release) => {
+                    let manifest = manifest_from_public(&release)?;
+                    let raw = serde_json::to_vec(&manifest)?;
+                    let origin = format!("{REPOSITORY_URL}/tree/{}", public_release::TRACKED_BRANCH);
+                    return Ok((manifest, origin, raw));
+                }
+                Err(error) => errors.push(format!("{error:#}")),
+            }
+        }
+        bail!("无法读取公共仓库版本信息：{}", errors.join("；"))
+    }
+    /// Downloads (incrementally when possible), builds and inventories one commit under `releases/`.
+    fn prepare(&self, manifest: &ReleaseManifest) -> Result<PreparedRelease> {
+        let id = format!("source-{}", manifest.commit);
+        let stage = self.root.join("staging").join(format!("{}-{}", id, SystemTime::now().duration_since(UNIX_EPOCH)?.as_millis()));
+        fs::create_dir(&stage)?;
+        progress(&self.root, "download", 5, "下载独立源码，不修改现有开发仓库")?;
+        let source = self.download_source(&manifest.commit, &stage)?;
+        let release = stage.join("release");
+        fs::create_dir(&release)?;
+        source_install::build_source(&source, &release, &self.root.join("cache"), &manifest.version, &manifest.commit,
+            !matches!(self.config.source_mode, SourceMode::Official), &self.root.join("logs/source-build.log"))?;
+        let executable = release.join(runtime_relative());
+        fs::create_dir_all(executable.parent().context("Missing runtime parent")?)?;
+        fs::write(&executable, include_bytes!(concat!(env!("OUT_DIR"), "/yingce-runtime.bin")))?;
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&executable, fs::Permissions::from_mode(0o755))?;
+        }
+        progress(&self.root, "inventory", 84, "核对构建文件")?;
+        let files = hash_inventory(&release)?;
+        let target = self.root.join("releases").join(&id);
+        if target.exists() { fs::rename(&target, stage.join("previous-failed-build")).context("无法保留前次失败构建，请确认相关进程已经退出")?; }
+        fs::rename(&release, &target)?;
+        let source_target = self.root.join("sources").join(&manifest.commit);
+        if !source_target.exists() { let _ = fs::rename(&source, &source_target); }
+        let _ = fs::remove_dir_all(&stage);
+        self.prune_archives(&manifest.commit);
+        Ok(PreparedRelease { version: manifest.version.clone(), commit: manifest.commit.clone(), sequence: manifest.sequence,
+            release_id: id, data_schema: manifest.migration.data_schema, files })
+    }
+    /// Keeps only the installed and newest pristine archives; each is ~300 MB.
+    fn prune_archives(&self, newest: &str) {
+        let Ok(entries) = fs::read_dir(self.root.join("cache")) else { return };
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let Some(rest) = name.strip_prefix("source-") else { continue };
+            let commit = rest.split('.').next().unwrap_or("");
+            let is_archive = rest.ends_with(".zip") || rest.ends_with(".json");
+            if is_archive && commit.len() == 40 && commit != newest && self.installed_commit.as_deref() != Some(commit) {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    /// A cached pristine archive of `commit` whose recorded digest still matches.
+    fn base_archive(&self, commit: &str) -> Option<PathBuf> {
+        let cached = self.root.join("cache").join(format!("source-{commit}.zip"));
+        let metadata: serde_json::Value = serde_json::from_slice(&read_bounded(File::open(cached.with_extension("json")).ok()?, 4096).ok()?).ok()?;
+        let digest_ok = metadata["commit"].as_str() == Some(commit) && metadata["sha256"].as_str() == Some(file_sha256(&cached).ok()?.as_str());
+        (digest_ok && zip::ZipArchive::new(File::open(&cached).ok()?).is_ok()).then_some(cached)
+    }
+    fn fetch_tree(&self, commit: &str) -> Result<Vec<public_release::TreeEntry>> {
+        let mut errors = Vec::new();
+        for root in public_sources(&self.config, DEFAULT_API_ROOT)? {
+            match public_release::fetch_tree(&self.client, &root, commit) {
+                Ok(tree) => return Ok(tree),
+                Err(error) => errors.push(format!("{error:#}")),
+            }
+        }
+        bail!("无法读取源码目录清单：{}", errors.join("；"))
+    }
+    fn fetch_raw(&self, commit: &str, entry: &public_release::TreeEntry) -> Result<Vec<u8>> {
+        let mut url = Url::parse(REPOSITORY_URL)?;
+        url.path_segments_mut()
+            .map_err(|_| anyhow!("Invalid repository URL"))?
+            .pop_if_empty()
+            .extend(["raw", commit])
+            .extend(entry.path.split('/'));
+        let mut errors = Vec::new();
+        for _attempt in 0..2 {
+            for source in public_sources(&self.config, url.as_str())? {
+                let result = (|| -> Result<Vec<u8>> {
+                    let response = self.client.get(source).timeout(Duration::from_secs(180)).send()?.error_for_status()?;
+                    ensure!(response.content_length().unwrap_or(0) <= entry.size, "文件大小与目录清单不一致");
+                    read_bounded(response, entry.size)
+                })();
+                match result { Ok(bytes) => return Ok(bytes), Err(error) => errors.push(format!("{error:#}")) }
+            }
+        }
+        bail!("下载 {} 失败：{}", entry.path, errors.join("；"))
+    }
+    /// Rebuilds the previous pristine tree locally and downloads only the files that differ.
+    /// `Ok(None)` means there is no previous archive to build on.
+    fn incremental_source(&self, commit: &str, stage: &Path) -> Result<Option<PathBuf>> {
+        let Some((base_commit, base_archive)) = [self.prepared_commit.as_deref(), self.installed_commit.as_deref()]
+            .into_iter().flatten().filter(|c| *c != commit).find_map(|c| self.base_archive(c).map(|a| (c.to_owned(), a)))
+        else { return Ok(None) };
+        progress(&self.root, "download", 4, "读取目录清单，只下载与上一版不同的文件")?;
+        let tree = self.fetch_tree(commit)?;
+        let unpacked = stage.join("checkout");
+        fs::create_dir(&unpacked)?;
+        extract_zip(&base_archive, &unpacked)?;
+        let base_root = unpacked.join(format!("open-ai-canvas-{base_commit}"));
+        ensure!(base_root.is_dir(), "上一版源码包目录结构不符合预期");
+        let plan = incremental::plan(&incremental::index_tree(&base_root)?, &tree);
+        ensure!(plan.within_limits(), "与上一版差异较大（{} 个文件、{} MiB），改用完整源码包", plan.download.len(), plan.bytes / 1024 / 1024);
+        let root = unpacked.join(format!("open-ai-canvas-{commit}"));
+        fs::rename(&base_root, &root)?;
+        let message = |done: usize, total: usize| { let _ = progress(&self.root, "download", 5, &format!("增量下载 {done}/{total} 个变化文件")); };
+        incremental::apply(&root, &plan, &|entry| self.fetch_raw(commit, entry), &message)?;
+        incremental::verify(&root, &tree)?;
+        ensure!(root.join("backend/go.mod").is_file() && root.join("web/bun.lock").is_file(), "源码缺少后端或锁文件");
+        // Keep this pristine tree as the base of the next increment; failure only costs a full download later.
+        let cached = self.root.join("cache").join(format!("source-{commit}.zip"));
+        let partial = cached.with_extension("zip.part");
+        if incremental::write_archive(&root, &partial).and_then(|_| Ok(fs::rename(&partial, &cached)?)).is_ok() {
+            let record = serde_json::to_vec(&serde_json::json!({"commit": commit, "source": "incremental", "sha256": file_sha256(&cached)?}))?;
+            let _ = fs::write(cached.with_extension("json"), record);
+        } else {
+            let _ = fs::remove_file(&partial);
+        }
+        Ok(Some(root))
+    }
+    fn download_source(&self, commit: &str, stage: &Path) -> Result<PathBuf> {
+        ensure!(commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()), "无效源码提交号");
+        let official = format!("{REPOSITORY_URL}/archive/{commit}.zip");
+        let archive = stage.join("source.zip");
+        let sources = public_sources(&self.config, &official)?;
+        let cached = self.root.join("cache").join(format!("source-{commit}.zip"));
+        let record = cached.with_extension("json");
+        let valid_cache = (|| -> Result<bool> {
+            let metadata: serde_json::Value = serde_json::from_slice(&read_bounded(File::open(&record)?, 4096)?)?;
+            if metadata["commit"].as_str() != Some(commit) || !sources.iter().any(|s| Some(s.as_str()) == metadata["source"].as_str()) { return Ok(false); }
+            Ok(metadata["sha256"].as_str() == Some(file_sha256(&cached)?.as_str()) && zip::ZipArchive::new(File::open(&cached)?).is_ok())
+        })().unwrap_or(false);
+        if !valid_cache {
+            match self.incremental_source(commit, stage) {
+                Ok(Some(source)) => return Ok(source),
+                Ok(None) => {}
+                Err(error) => {
+                    let _ = progress(&self.root, "download", 5, &format!("增量更新不可用，改用完整源码包：{error:#}"));
+                    let _ = fs::remove_dir_all(stage.join("checkout"));
+                }
+            }
+        }
+        let mut downloaded = valid_cache;
+        if valid_cache { fs::copy(&cached, &archive)?; }
+        let mut errors = Vec::new();
+        for url in sources {
+            if downloaded { break; }
+            let origin = url.to_string();
+            let result = (|| -> Result<()> {
+                let response = self.client.get(url).timeout(Duration::from_secs(600)).send()?.error_for_status()?;
+                ensure!(response.content_length().unwrap_or(0) <= MAX_ARCHIVE, "源码包过大");
+                let mut file = OpenOptions::new().create_new(true).write(true).open(&archive)?;
+                let mut response = response.take(MAX_ARCHIVE + 1);
+                let mut count = 0u64;
+                let mut buffer = [0u8; 65536];
+                let mut last = Instant::now();
+                loop {
+                    let n = response.read(&mut buffer)?;
+                    if n == 0 { break; }
+                    count += n as u64;
+                    ensure!(count <= MAX_ARCHIVE, "源码包下载超过上限");
+                    file.write_all(&buffer[..n])?;
+                    if last.elapsed() >= Duration::from_secs(1) {
+                        progress(&self.root, "download", 5, &format!("正在下载独立源码，已接收 {} MiB", count / 1024 / 1024))?;
+                        last = Instant::now();
+                    }
+                }
+                ensure!(count > 0, "源码下载为空");
+                file.sync_all()?;
+                drop(file);
+                zip::ZipArchive::new(File::open(&archive)?).context("源码下载被截断或不是完整 ZIP")?;
+                fs::copy(&archive, &cached)?;
+                fs::write(&record, serde_json::to_vec(&serde_json::json!({"commit":commit,"source":origin,"sha256":file_sha256(&cached)?}))?)?;
+                Ok(())
+            })();
+            match result { Ok(()) => { downloaded = true; break; }, Err(error) => errors.push(format!("{error:#}")) }
+            if archive.exists() { fs::remove_file(&archive)?; }
+        }
+        ensure!(downloaded, "源码下载失败，请检查网络或切换镜像：{}", errors.join("；"));
+        let unpacked = stage.join("checkout");
+        fs::create_dir(&unpacked)?;
+        extract_zip(&archive, &unpacked)?;
+        let entries = fs::read_dir(&unpacked)?.collect::<std::io::Result<Vec<_>>>()?;
+        ensure!(entries.len() == 1 && entries[0].file_type()?.is_dir(), "公共源码包目录结构不符合预期");
+        ensure!(entries[0].file_name() == std::ffi::OsStr::new(&format!("open-ai-canvas-{commit}")), "源码归档根目录与固定提交不匹配");
+        let source = entries[0].path();
+        ensure!(source.join("backend/go.mod").is_file() && source.join("web/bun.lock").is_file(), "源码缺少后端或锁文件");
+        Ok(source)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1424,6 +1767,65 @@ mod tests {
             ..Config::default()
         })
         .is_err());
+    }
+    #[test]
+    fn schedule_runs_once_per_slot_and_catches_up() {
+        use chrono::{FixedOffset, TimeZone};
+        let zone = FixedOffset::east_opt(8 * 3600).unwrap();
+        let at = |d: u32, h: u32, m: u32| zone.with_ymd_and_hms(2026, 10, d, h, m, 0).unwrap();
+        let daily = AutoUpdate { enabled: true, schedule: Schedule::Daily, time: "03:00".into(), interval_hours: 24 };
+        // Before today's slot: not due. After it: due until a check is recorded.
+        assert!(!is_due(&daily, at(25, 20, 0).timestamp(), &at(26, 2, 59)));
+        assert!(is_due(&daily, at(25, 20, 0).timestamp(), &at(26, 3, 0)));
+        assert!(!is_due(&daily, at(26, 3, 5).timestamp(), &at(26, 20, 0)));
+        // Launcher was closed over the slot: runs when reopened, once.
+        assert!(is_due(&daily, at(24, 3, 1).timestamp(), &at(26, 9, 0)));
+        assert!(is_due(&daily, 0, &at(26, 3, 0)));
+        let interval = AutoUpdate { schedule: Schedule::Interval, interval_hours: 6, ..daily.clone() };
+        assert!(is_due(&interval, 0, &at(26, 0, 0)));
+        assert!(!is_due(&interval, at(26, 0, 0).timestamp(), &at(26, 5, 59)));
+        assert!(is_due(&interval, at(26, 0, 0).timestamp(), &at(26, 6, 0)));
+        let off = AutoUpdate { enabled: false, ..daily };
+        assert!(!is_due(&off, 0, &at(26, 3, 0)));
+    }
+    #[test]
+    fn schedule_settings_are_validated_and_do_not_need_a_stopped_service() {
+        for (time, hours) in [("3:00", 24), ("24:00", 24), ("03:60", 24), ("03:00", 0), ("03:00", 169)] {
+            let config = Config { auto_update: AutoUpdate { time: time.into(), interval_hours: hours, ..AutoUpdate::default() }, ..Config::default() };
+            assert!(validate_config(&config).is_err(), "{time} {hours}");
+        }
+        assert!(validate_config(&Config::default()).is_ok());
+        // Old state files without the field still load.
+        let state: State = serde_json::from_str(r#"{"config":{"sourceMode":"mirror","officialUrl":null,"mirrorUrl":null,"port":37890,"openBrowser":true},"installed":null,"highestSequence":0}"#).unwrap();
+        assert!(!state.config.auto_update.enabled && state.prepared.is_none());
+    }
+    #[test]
+    fn only_one_prepare_or_install_runs_at_a_time() {
+        let flag = Arc::new(AtomicBool::new(false));
+        let first = BusyGuard::acquire(&flag).unwrap();
+        assert!(BusyGuard::acquire(&flag).is_err());
+        drop(first);
+        assert!(BusyGuard::acquire(&flag).is_ok());
+    }
+    #[test]
+    #[ignore = "explicit network probe: needs a previous source archive and record in YINGCE_INCREMENTAL_BASE_CACHE"]
+    fn incremental_live_probe() {
+        let var = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} is required"));
+        let (cache, base, target) = (PathBuf::from(var("YINGCE_INCREMENTAL_BASE_CACHE")), var("YINGCE_INCREMENTAL_BASE_COMMIT"), var("YINGCE_INCREMENTAL_TARGET_COMMIT"));
+        let root = std::env::temp_dir().join(format!("yingce-incremental-live-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let manager = Manager::new(root.clone()).unwrap();
+        for ext in ["zip", "json"] { fs::copy(cache.join(format!("source-{base}.{ext}")), root.join(format!("cache/source-{base}.{ext}"))).unwrap(); }
+        let mut ctx = manager.prepare_ctx();
+        ctx.installed_commit = Some(base);
+        let stage = root.join("staging/probe");
+        fs::create_dir_all(&stage).unwrap();
+        let started = Instant::now();
+        let source = ctx.incremental_source(&target, &stage).unwrap().expect("a base archive exists");
+        println!("INCREMENTAL_OK {} files in {:?}", incremental::index_tree(&source).unwrap().len(), started.elapsed());
+        assert!(root.join(format!("cache/source-{target}.zip")).is_file() && ctx.base_archive(&target).is_some());
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn size_bounds() {
