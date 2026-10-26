@@ -1434,6 +1434,18 @@ impl Prepare {
             }
         }
     }
+    /// Commits that have a cached source archive, newest file first (e.g. one imported from a local checkout).
+    fn cached_commits(&self) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(self.root.join("cache")) else { return vec![] };
+        let mut found: Vec<(SystemTime, String)> = entries.flatten().filter_map(|entry| {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let commit = name.strip_prefix("source-")?.strip_suffix(".zip")?.to_owned();
+            let valid = commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit());
+            valid.then(|| (entry.metadata().and_then(|m| m.modified()).unwrap_or(UNIX_EPOCH), commit))
+        }).collect();
+        found.sort_by(|a, b| b.0.cmp(&a.0));
+        found.into_iter().map(|(_, commit)| commit).collect()
+    }
     /// A cached pristine archive of `commit` whose recorded digest still matches.
     fn base_archive(&self, commit: &str) -> Option<PathBuf> {
         let cached = self.root.join("cache").join(format!("source-{commit}.zip"));
@@ -1474,8 +1486,9 @@ impl Prepare {
     /// Rebuilds the previous pristine tree locally and downloads only the files that differ.
     /// `Ok(None)` means there is no previous archive to build on.
     fn incremental_source(&self, commit: &str, stage: &Path) -> Result<Option<PathBuf>> {
-        let Some((base_commit, base_archive)) = [self.prepared_commit.as_deref(), self.installed_commit.as_deref()]
-            .into_iter().flatten().filter(|c| *c != commit).find_map(|c| self.base_archive(c).map(|a| (c.to_owned(), a)))
+        let known = [self.prepared_commit.clone(), self.installed_commit.clone()];
+        let Some((base_commit, base_archive)) = known.into_iter().flatten().chain(self.cached_commits())
+            .filter(|c| c != commit).find_map(|c| self.base_archive(&c).map(|a| (c, a)))
         else { return Ok(None) };
         progress(&self.root, "download", 4, "读取目录清单，只下载与上一版不同的文件")?;
         let tree = self.fetch_tree(commit)?;
@@ -1512,7 +1525,8 @@ impl Prepare {
         let record = cached.with_extension("json");
         let valid_cache = (|| -> Result<bool> {
             let metadata: serde_json::Value = serde_json::from_slice(&read_bounded(File::open(&record)?, 4096)?)?;
-            if metadata["commit"].as_str() != Some(commit) || !sources.iter().any(|s| Some(s.as_str()) == metadata["source"].as_str()) { return Ok(false); }
+            let local = matches!(metadata["source"].as_str(), Some("incremental" | "local"));
+            if metadata["commit"].as_str() != Some(commit) || !(local || sources.iter().any(|s| Some(s.as_str()) == metadata["source"].as_str())) { return Ok(false); }
             Ok(metadata["sha256"].as_str() == Some(file_sha256(&cached)?.as_str()) && zip::ZipArchive::new(File::open(&cached)?).is_ok())
         })().unwrap_or(false);
         if !valid_cache {
@@ -1812,6 +1826,21 @@ mod tests {
         // Old state files without the field still load.
         let state: State = serde_json::from_str(r#"{"config":{"sourceMode":"mirror","officialUrl":null,"mirrorUrl":null,"port":37890,"openBrowser":true},"installed":null,"highestSequence":0}"#).unwrap();
         assert!(!state.config.auto_update.enabled && state.prepared.is_none());
+    }
+    #[test]
+    fn cached_archives_are_listed_for_incremental_bases() {
+        let root = std::env::temp_dir().join(format!("yingce-cached-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let manager = Manager::new(root.clone()).unwrap();
+        let (old, new) = ("a".repeat(40), "b".repeat(40));
+        fs::write(root.join(format!("cache/source-{old}.zip")), b"x").unwrap();
+        thread::sleep(Duration::from_millis(30));
+        fs::write(root.join(format!("cache/source-{new}.zip")), b"x").unwrap();
+        fs::write(root.join("cache/source-notacommit.zip"), b"x").unwrap();
+        fs::write(root.join(format!("cache/source-{old}.json")), b"{}").unwrap();
+        assert_eq!(manager.prepare_ctx().cached_commits(), vec![new, old]);
+        drop(manager);
+        fs::remove_dir_all(root).unwrap();
     }
     #[test]
     fn only_one_prepare_or_install_runs_at_a_time() {
