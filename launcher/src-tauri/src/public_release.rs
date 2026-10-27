@@ -35,13 +35,9 @@ struct CommitDetail {
 fn validate_api_root(api_root: &Url) -> Result<()> {
     ensure!(
         api_root.as_str() == DEFAULT_API_ROOT
-            || [
-                "https://ghproxy.net/",
-                "https://ghfast.top/",
-                "https://gh-proxy.com/"
-            ]
-            .iter()
-            .any(|prefix| api_root.as_str() == format!("{prefix}{DEFAULT_API_ROOT}")),
+            || crate::core::PUBLIC_MIRRORS
+                .iter()
+                .any(|host| api_root.as_str() == format!("https://{host}/{DEFAULT_API_ROOT}")),
         "源码来源仅支持影策官方 GitHub API 或已知 HTTPS 代理的官方仓库前缀。"
     );
     Ok(())
@@ -237,13 +233,9 @@ mod tests {
     #[test]
     fn accepts_only_exact_official_api_or_known_proxy_prefix() {
         assert!(validate_api_root(&Url::parse(DEFAULT_API_ROOT).unwrap()).is_ok());
-        for prefix in [
-            "https://ghproxy.net/",
-            "https://ghfast.top/",
-            "https://gh-proxy.com/",
-        ] {
+        for host in crate::core::PUBLIC_MIRRORS {
             assert!(validate_api_root(
-                &Url::parse(&format!("{prefix}{DEFAULT_API_ROOT}")).unwrap()
+                &Url::parse(&format!("https://{host}/{DEFAULT_API_ROOT}")).unwrap()
             )
             .is_ok());
         }

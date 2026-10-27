@@ -1,4 +1,5 @@
 mod core;
+mod download;
 mod incremental;
 mod public_release;
 mod source_install;

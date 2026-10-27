@@ -1,18 +1,18 @@
 //! Independent source builds of the fixed public upstream repository.
-use crate::{incremental, public_release::{self, PublicRelease, DEFAULT_API_ROOT, REPOSITORY_URL}, source_install};
+use crate::{download, incremental, public_release::{self, PublicRelease, DEFAULT_API_ROOT, REPOSITORY_URL}, source_install};
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use fs2::FileExt;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, HashMap},
     fs::{self, File, OpenOptions},
     io::{Read, Write},
     net::TcpListener,
     path::{Component, Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
+    sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex, OnceLock},
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -22,7 +22,9 @@ use url::Url;
 const MAX_MANIFEST: u64 = 2 * 1024 * 1024;
 const MAX_STATE: u64 = 64 * 1024 * 1024;
 const MAX_ARCHIVE: u64 = 4 * 1024 * 1024 * 1024;
-pub const PUBLIC_MIRRORS: [&str; 3] = ["gh-proxy.com", "ghfast.top", "ghproxy.net"];
+/// Approved public GitHub proxies. Verified individually (small files, API tree and source archive)
+/// from a Windows network; the first entry is the default. Order only matters before speed ranking.
+pub const PUBLIC_MIRRORS: [&str; 6] = ["gh-proxy.com", "gh-proxy.org", "gh.idayer.com", "cors.isteed.cc", "ghfast.top", "ghproxy.net"];
 const MAX_EXPANDED: u64 = 12 * 1024 * 1024 * 1024;
 const MAX_FILES: usize = 100_000;
 const MAX_LOG: u64 = 8 * 1024 * 1024;
@@ -258,8 +260,7 @@ impl Manager {
                     .first()
                     .and_then(|u| u.host_str())
                     .unwrap_or("");
-                let proxies = ["ghproxy.net", "ghfast.top", "gh-proxy.com"];
-                let allowed = if proxies.contains(&first_host) {
+                let allowed = if PUBLIC_MIRRORS.contains(&first_host) {
                     url.host_str() == Some(first_host)
                 } else {
                     [
@@ -843,6 +844,36 @@ fn readiness_matches(raw: &[u8], version: &str, commit: &str) -> bool {
         && body["data"]["status"].as_str() == Some("ok")
         && body["data"]["build"]["commit"].as_str() == Some(commit)
         && body["data"]["build"]["version"].as_str() == Some(version)
+}
+/// What this process has learned about each download host: its measured speed rank (0 = fastest)
+/// and how many requests in a row failed. Hosts with recent failures sink to the end.
+#[derive(Default)]
+struct HostStat {
+    rank: usize,
+    fails: u32,
+}
+fn host_stats() -> &'static Mutex<HashMap<String, HostStat>> {
+    static STATS: OnceLock<Mutex<HashMap<String, HostStat>>> = OnceLock::new();
+    STATS.get_or_init(Default::default)
+}
+fn host_key(url: &Url) -> String {
+    match url.host_str().unwrap_or("") {
+        "api.github.com" => "github.com".to_owned(),
+        host => host.to_owned(),
+    }
+}
+fn order_sources(mut sources: Vec<Url>) -> Vec<Url> {
+    if let Ok(stats) = host_stats().lock() {
+        // Stable sort: sources the process knows nothing about keep the configured order.
+        sources.sort_by_key(|u| stats.get(&host_key(u)).map(|s| (s.fails.min(3), s.rank)).unwrap_or((0, usize::MAX)));
+    }
+    sources
+}
+fn note_source(url: &Url, ok: bool) {
+    if let Ok(mut stats) = host_stats().lock() {
+        let stat = stats.entry(host_key(url)).or_default();
+        stat.fails = if ok { 0 } else { stat.fails + 1 };
+    }
 }
 fn public_sources(config: &Config, target: &str) -> Result<Vec<Url>> {
     let direct = Url::parse(target)?;
@@ -1455,15 +1486,29 @@ impl Prepare {
     }
     fn fetch_tree(&self, commit: &str) -> Result<Vec<public_release::TreeEntry>> {
         let mut errors = Vec::new();
-        for root in public_sources(&self.config, DEFAULT_API_ROOT)? {
+        for root in order_sources(public_sources(&self.config, DEFAULT_API_ROOT)?) {
             match public_release::fetch_tree(&self.client, &root, commit) {
-                Ok(tree) => return Ok(tree),
-                Err(error) => errors.push(format!("{error:#}")),
+                Ok(tree) => {
+                    note_source(&root, true);
+                    return Ok(tree);
+                }
+                Err(error) => {
+                    note_source(&root, false);
+                    errors.push(format!("{error:#}"));
+                }
             }
         }
         bail!("无法读取源码目录清单：{}", errors.join("；"))
     }
     fn fetch_raw(&self, commit: &str, entry: &public_release::TreeEntry) -> Result<Vec<u8>> {
+        // Files already fetched by an interrupted run are reused: proxies do not support `Range`,
+        // so per-file granularity is the only resume point a failed install has.
+        let cached = self.root.join("cache/blobs").join(&entry.sha);
+        if let Ok(bytes) = fs::read(&cached) {
+            if bytes.len() as u64 == entry.size && incremental::blob_sha1(&bytes) == entry.sha {
+                return Ok(bytes);
+            }
+        }
         let mut url = Url::parse(REPOSITORY_URL)?;
         url.path_segments_mut()
             .map_err(|_| anyhow!("Invalid repository URL"))?
@@ -1471,17 +1516,55 @@ impl Prepare {
             .extend(["raw", commit])
             .extend(entry.path.split('/'));
         let mut errors = Vec::new();
-        for _attempt in 0..2 {
-            for source in public_sources(&self.config, url.as_str())? {
+        for round in 0..4u32 {
+            if round > 0 {
+                // Dropped connections are usually rate limiting: back off instead of hammering.
+                let jitter = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| u64::from(d.subsec_millis()) % 250).unwrap_or(0);
+                thread::sleep(Duration::from_millis(500u64 << (round - 1)) + Duration::from_millis(jitter));
+            }
+            for source in order_sources(public_sources(&self.config, url.as_str())?) {
                 let result = (|| -> Result<Vec<u8>> {
-                    let response = self.client.get(source).timeout(Duration::from_secs(180)).send()?.error_for_status()?;
+                    let response = self.client.get(source.clone()).timeout(Duration::from_secs(60)).send()?.error_for_status()?;
                     ensure!(response.content_length().unwrap_or(0) <= entry.size, "文件大小与目录清单不一致");
                     read_bounded(response, entry.size)
                 })();
-                match result { Ok(bytes) => return Ok(bytes), Err(error) => errors.push(format!("{error:#}")) }
+                match result {
+                    Ok(bytes) => {
+                        note_source(&source, true);
+                        let temporary = cached.with_extension("part");
+                        if fs::create_dir_all(cached.parent().unwrap_or(Path::new("."))).is_ok()
+                            && fs::write(&temporary, &bytes).is_ok()
+                            && fs::rename(&temporary, &cached).is_err()
+                        {
+                            let _ = fs::remove_file(&temporary);
+                        }
+                        return Ok(bytes);
+                    }
+                    Err(error) => {
+                        note_source(&source, false);
+                        errors.push(format!("{}：{error:#}", source.host_str().unwrap_or("?")));
+                    }
+                }
             }
         }
-        bail!("下载 {} 失败：{}", entry.path, errors.join("；"))
+        let tail = errors.len().saturating_sub(3);
+        bail!("下载 {} 失败（已重试 4 轮）：{}", entry.path, errors[tail..].join("；"))
+    }
+    /// Measures every download host once per run (a few seconds) so the fastest is tried first.
+    fn rank_sources(&self, sources: &[Url]) {
+        let unranked = host_stats().lock().map(|s| s.is_empty()).unwrap_or(false);
+        if sources.len() < 2 || !unranked { return; }
+        let _ = progress(&self.root, "download", 4, "测试各下载来源速度");
+        let urls: Vec<String> = sources.iter().map(Url::to_string).collect();
+        let speeds = download::measure(&self.client, &urls, Duration::from_secs(8));
+        let mut order: Vec<usize> = (0..sources.len()).collect();
+        order.sort_by_key(|&i| std::cmp::Reverse(speeds[i]));
+        if let Ok(mut stats) = host_stats().lock() {
+            for (rank, &i) in order.iter().enumerate() {
+                let host = host_key(&sources[i]);
+                stats.insert(host, HostStat { rank, fails: u32::from(speeds[i] == 0) });
+            }
+        }
     }
     /// Rebuilds the previous pristine tree locally and downloads only the files that differ.
     /// `Ok(None)` means there is no previous archive to build on.
@@ -1491,7 +1574,7 @@ impl Prepare {
             .filter(|c| c != commit).find_map(|c| self.base_archive(&c).map(|a| (c, a)))
         else { return Ok(None) };
         progress(&self.root, "download", 4, "读取目录清单，只下载与上一版不同的文件")?;
-        let tree = self.fetch_tree(commit)?;
+        let tree = incremental::filter_needed(self.fetch_tree(commit)?);
         let unpacked = stage.join("checkout");
         fs::create_dir(&unpacked)?;
         extract_zip(&base_archive, &unpacked)?;
@@ -1501,20 +1584,51 @@ impl Prepare {
         ensure!(plan.within_limits(), "与上一版差异较大（{} 个文件、{} MiB），改用完整源码包", plan.download.len(), plan.bytes / 1024 / 1024);
         let root = unpacked.join(format!("open-ai-canvas-{commit}"));
         fs::rename(&base_root, &root)?;
-        let message = |done: usize, total: usize| { let _ = progress(&self.root, "download", 5, &format!("增量下载 {done}/{total} 个变化文件")); };
-        incremental::apply(&root, &plan, &|entry| self.fetch_raw(commit, entry), &message)?;
-        incremental::verify(&root, &tree)?;
+        self.sync_tree(&root, &plan, &tree, commit, incremental::UPDATE_WORKERS, false)?;
+        Ok(Some(root))
+    }
+    /// First install: there is nothing to diff against, so fetch only the files the source build
+    /// reads (about a third of the repository) instead of the complete archive.
+    fn selective_source(&self, commit: &str, stage: &Path) -> Result<PathBuf> {
+        progress(&self.root, "download", 4, "读取目录清单，只下载构建需要的文件")?;
+        let tree = incremental::filter_needed(self.fetch_tree(commit)?);
+        let plan = incremental::plan(&BTreeMap::new(), &tree);
+        ensure!(plan.within_scratch_limits(), "需下载 {} 个文件、{} MiB，改用完整源码包", plan.download.len(), plan.bytes / 1024 / 1024);
+        let root = stage.join("checkout").join(format!("open-ai-canvas-{commit}"));
+        fs::create_dir_all(&root)?;
+        self.sync_tree(&root, &plan, &tree, commit, incremental::SCRATCH_WORKERS, true)?;
+        Ok(root)
+    }
+    /// `guard`: give up early when per-file requests are too slow to beat the single archive
+    /// (many small requests through a throttled proxy), so a first install is never worse than before.
+    fn sync_tree(&self, root: &Path, plan: &incremental::Plan, tree: &[public_release::TreeEntry], commit: &str, workers: usize, guard: bool) -> Result<()> {
+        let started = Instant::now();
+        let finished = std::sync::atomic::AtomicUsize::new(0);
+        let message = |done: usize, total: usize| {
+            finished.store(done, std::sync::atomic::Ordering::SeqCst);
+            let _ = progress(&self.root, "download", 5, &format!("按需下载 {done}/{total} 个文件"));
+        };
+        let fetch = |entry: &public_release::TreeEntry| {
+            if guard && started.elapsed() > Duration::from_secs(90)
+                && finished.load(std::sync::atomic::Ordering::SeqCst) * 100 < plan.download.len() * 3 {
+                bail!("90 秒内下载不足 3% 的文件，代理对小文件请求太慢");
+            }
+            self.fetch_raw(commit, entry)
+        };
+        incremental::apply(root, plan, workers, &fetch, &message)?;
+        incremental::verify(root, tree)?;
         ensure!(root.join("backend/go.mod").is_file() && root.join("web/bun.lock").is_file(), "源码缺少后端或锁文件");
         // Keep this pristine tree as the base of the next increment; failure only costs a full download later.
         let cached = self.root.join("cache").join(format!("source-{commit}.zip"));
         let partial = cached.with_extension("zip.part");
-        if incremental::write_archive(&root, &partial).and_then(|_| Ok(fs::rename(&partial, &cached)?)).is_ok() {
+        if incremental::write_archive(root, &partial).and_then(|_| Ok(fs::rename(&partial, &cached)?)).is_ok() {
             let record = serde_json::to_vec(&serde_json::json!({"commit": commit, "source": "incremental", "sha256": file_sha256(&cached)?}))?;
             let _ = fs::write(cached.with_extension("json"), record);
         } else {
             let _ = fs::remove_file(&partial);
         }
-        Ok(Some(root))
+        let _ = fs::remove_dir_all(self.root.join("cache/blobs"));
+        Ok(())
     }
     fn download_source(&self, commit: &str, stage: &Path) -> Result<PathBuf> {
         ensure!(commit.len() == 40 && commit.bytes().all(|b| b.is_ascii_hexdigit()), "无效源码提交号");
@@ -1522,6 +1636,7 @@ impl Prepare {
         let archive = stage.join("source.zip");
         let sources = public_sources(&self.config, &official)?;
         let cached = self.root.join("cache").join(format!("source-{commit}.zip"));
+
         let record = cached.with_extension("json");
         let valid_cache = (|| -> Result<bool> {
             let metadata: serde_json::Value = serde_json::from_slice(&read_bounded(File::open(&record)?, 4096)?)?;
@@ -1530,50 +1645,65 @@ impl Prepare {
             Ok(metadata["sha256"].as_str() == Some(file_sha256(&cached)?.as_str()) && zip::ZipArchive::new(File::open(&cached)?).is_ok())
         })().unwrap_or(false);
         if !valid_cache {
+            self.rank_sources(&sources);
             match self.incremental_source(commit, stage) {
                 Ok(Some(source)) => return Ok(source),
-                Ok(None) => {}
+                Ok(None) => match self.selective_source(commit, stage) {
+                    Ok(source) => return Ok(source),
+                    Err(error) => {
+                        let _ = progress(&self.root, "download", 5, &format!("按需下载不可用，改用完整源码包：{error:#}"));
+                        let _ = fs::remove_dir_all(stage.join("checkout"));
+                    }
+                },
                 Err(error) => {
                     let _ = progress(&self.root, "download", 5, &format!("增量更新不可用，改用完整源码包：{error:#}"));
                     let _ = fs::remove_dir_all(stage.join("checkout"));
                 }
             }
         }
+        let sources = order_sources(sources);
         let mut downloaded = valid_cache;
         if valid_cache { fs::copy(&cached, &archive)?; }
         let mut errors = Vec::new();
+        let _ = fs::create_dir_all(self.root.join("cache"));
+        // Partial downloads of other commits can never be continued.
+        if let Ok(entries) = fs::read_dir(self.root.join("cache")) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if name.starts_with("source-") && name.ends_with(".part") && !name.starts_with(&format!("source-{commit}.")) {
+                    let _ = fs::remove_file(entry.path());
+                }
+            }
+        }
         for url in sources {
             if downloaded { break; }
             let origin = url.to_string();
             let result = (|| -> Result<()> {
-                // A free proxy may stream a ~300 MB archive slowly; allow it before trying the next source.
-                let response = self.client.get(url).timeout(Duration::from_secs(1800)).send()?.error_for_status()?;
-                ensure!(response.content_length().unwrap_or(0) <= MAX_ARCHIVE, "源码包过大");
-                let mut file = OpenOptions::new().create_new(true).write(true).open(&archive)?;
-                let mut response = response.take(MAX_ARCHIVE + 1);
-                let mut count = 0u64;
-                let mut buffer = [0u8; 65536];
-                let mut last = Instant::now();
-                loop {
-                    let n = response.read(&mut buffer)?;
-                    if n == 0 { break; }
-                    count += n as u64;
-                    ensure!(count <= MAX_ARCHIVE, "源码包下载超过上限");
-                    file.write_all(&buffer[..n])?;
-                    if last.elapsed() >= Duration::from_secs(1) {
-                        progress(&self.root, "download", 5, &format!("正在下载独立源码，已接收 {} MiB", count / 1024 / 1024))?;
-                        last = Instant::now();
-                    }
+                // Resumable per source: a different proxy may build a different (but equivalent) ZIP,
+                // so partial bytes are only ever continued from the same URL.
+                let part = self.root.join("cache").join(format!("source-{commit}.{}.part", &hex::encode(Sha256::digest(origin.as_bytes()))[..12]));
+                let report = |done: u64, total: Option<u64>| {
+                    let _ = progress(&self.root, "download", 5, &match total {
+                        Some(total) => format!("正在下载独立源码，已接收 {} / {} MiB", done / 1024 / 1024, total / 1024 / 1024),
+                        None => format!("正在下载独立源码，已接收 {} MiB", done / 1024 / 1024),
+                    });
+                };
+                let size = download::fetch_to_file(&self.client, &origin, &part, &download::Options::new(MAX_ARCHIVE), &report)?;
+                ensure!(size > 0, "源码下载为空");
+                if archive.exists() { fs::remove_file(&archive)?; }
+                if fs::rename(&part, &archive).is_err() {
+                    fs::copy(&part, &archive)?;
+                    fs::remove_file(&part)?;
                 }
-                ensure!(count > 0, "源码下载为空");
-                file.sync_all()?;
-                drop(file);
                 zip::ZipArchive::new(File::open(&archive)?).context("源码下载被截断或不是完整 ZIP")?;
                 fs::copy(&archive, &cached)?;
                 fs::write(&record, serde_json::to_vec(&serde_json::json!({"commit":commit,"source":origin,"sha256":file_sha256(&cached)?}))?)?;
                 Ok(())
             })();
-            match result { Ok(()) => { downloaded = true; break; }, Err(error) => errors.push(format!("{error:#}")) }
+            match result {
+                Ok(()) => { note_source(&url, true); downloaded = true; break; }
+                Err(error) => { note_source(&url, false); errors.push(format!("{error:#}")) }
+            }
             if archive.exists() { fs::remove_file(&archive)?; }
         }
         ensure!(downloaded, "源码下载失败，请检查网络或切换镜像：{}", errors.join("；"));
@@ -1593,6 +1723,39 @@ impl Prepare {
 mod tests {
     use super::*;
     #[test]
+    fn failing_or_slow_hosts_are_tried_last() {
+        let urls = |hosts: &[&str]| hosts.iter().map(|h| Url::parse(&format!("https://{h}/x")).unwrap()).collect::<Vec<_>>();
+        let hosts = |urls: Vec<Url>| urls.iter().map(|u| u.host_str().unwrap().to_owned()).collect::<Vec<_>>();
+        {
+            let mut stats = host_stats().lock().unwrap();
+            stats.insert("down.order.test".into(), HostStat { rank: 0, fails: 0 });
+            stats.insert("fast.order.test".into(), HostStat { rank: 1, fails: 0 });
+            stats.insert("slow.order.test".into(), HostStat { rank: 2, fails: 0 });
+        }
+        let all = ["slow.order.test", "down.order.test", "fast.order.test"];
+        for _ in 0..3 {
+            note_source(&Url::parse("https://down.order.test/").unwrap(), false);
+        }
+        assert_eq!(hosts(order_sources(urls(&all))), ["fast.order.test", "slow.order.test", "down.order.test"]);
+        note_source(&Url::parse("https://down.order.test/").unwrap(), true);
+        assert_eq!(hosts(order_sources(urls(&all))), ["down.order.test", "fast.order.test", "slow.order.test"], "a success clears the demotion");
+        assert_eq!(host_key(&Url::parse("https://api.github.com/x").unwrap()), "github.com");
+    }
+
+    #[test]
+    #[ignore = "explicit live probe of the public GitHub proxies"]
+    fn proxy_speed_live_probe() {
+        let client = Client::builder().connect_timeout(Duration::from_secs(10)).build().unwrap();
+        let commit = std::env::var("PROBE_COMMIT").unwrap();
+        let urls: Vec<String> = PUBLIC_MIRRORS.iter().map(|h| format!("https://{h}/{REPOSITORY_URL}/archive/{commit}.zip")).collect();
+        let speeds = download::measure(&client, &urls, Duration::from_secs(8));
+        for (host, bytes) in PUBLIC_MIRRORS.iter().zip(&speeds) {
+            println!("PROBE {host}: {} KiB in 8s", bytes / 1024);
+        }
+        assert!(speeds.iter().any(|b| *b > 0));
+    }
+
+    #[test]
     fn public_source_modes_are_strict_without_keys() {
         let mut config = Config::default();
         assert!(matches!(config.source_mode, SourceMode::Mirror), "default source is the mirror");
@@ -1605,10 +1768,10 @@ mod tests {
         assert_eq!(mirrors[0].host_str(), Some("gh-proxy.com"));
         config.mirror_url = Some("https://ghproxy.net/".into());
         let order: Vec<_> = public_sources(&config, DEFAULT_API_ROOT).unwrap().iter().map(|u| u.host_str().unwrap().to_owned()).collect();
-        assert_eq!(order, ["ghproxy.net", "gh-proxy.com", "ghfast.top"], "selected proxy first, the others as fallbacks");
+        assert_eq!(order, ["ghproxy.net", "gh-proxy.com", "gh-proxy.org", "gh.idayer.com", "cors.isteed.cc", "ghfast.top"], "selected proxy first, the others as fallbacks");
         config.source_mode = SourceMode::Auto;
         let auto = public_sources(&config, DEFAULT_API_ROOT).unwrap();
-        assert_eq!(auto.len(), 4);
+        assert_eq!(auto.len(), 1 + PUBLIC_MIRRORS.len());
         assert_eq!(auto[0].host_str(), Some("api.github.com"));
         config.mirror_url = Some("https://gh-proxy.com/".into());
         config.mirror_url = Some("https://unapproved.example/".into());
