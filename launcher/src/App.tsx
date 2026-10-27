@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { setMirrorEnabled } from "./source-preferences";
-import { command, defaultAutoUpdate, desktop, errorText, pollOperationProgress, progressPercent, validateConfig, type Config, type OperationProgress, type Status, type UpdateInfo } from "./bridge";
+import { command, defaultAutoUpdate, desktop, errorText, pollOperationProgress, progressPercent, publicMirrors, validateConfig, type Config, type OperationProgress, type Status, type UpdateInfo } from "./bridge";
 
 const initialConfig: Config = { sourceMode: "mirror", officialUrl: "https://github.com/ddcat-ai/open-ai-canvas", mirrorUrl: "https://gh-proxy.com/", port: 37890, openBrowser: true, autoUpdate: defaultAutoUpdate };
 const formatTime = (seconds: number) => seconds > 0 ? new Date(seconds * 1000).toLocaleString("zh-CN", { hour12: false }) : "尚未检查";
@@ -149,7 +149,7 @@ export default function App() {
         <div><label className="checkbox"><input type="checkbox" checked={config.sourceMode !== "official"} aria-describedby="mirror-help" onChange={(e) => setConfig(setMirrorEnabled(config, e.target.checked))}/>使用镜像下载</label><small id="mirror-help">{config.sourceMode === "official" ? "已关闭：仅直连官方源，即使下载失败也不会使用镜像。" : "已开启：可选择仅通过镜像下载，或在直连失败时使用镜像。"}</small></div>
         {config.sourceMode !== "official" && <label>镜像使用方式<select value={config.sourceMode} onChange={(e) => setConfig({ ...config, sourceMode: e.target.value as "auto" | "mirror" })}><option value="mirror">仅使用镜像（适合无法连接 GitHub 的网络）</option><option value="auto">按需使用：直连失败后自动切换镜像</option></select></label>}
         <label>公共仓库<input type="url" readOnly value={initialConfig.officialUrl || ""}/><small>固定指向影策上游仓库，不会操作你本机已有的开发仓库。</small></label>
-        {config.sourceMode !== "official" && <label>公共 GitHub 镜像<select value={config.mirrorUrl || "https://gh-proxy.com/"} onChange={(e) => setConfig({ ...config, mirrorUrl: e.target.value })}><option value="https://ghproxy.net/">ghproxy.net</option><option value="https://ghfast.top/">ghfast.top</option><option value="https://gh-proxy.com/">gh-proxy.com</option></select><small>程序自动拼接完整公共仓库地址。第三方服务不保证长期可用；不会向代理发送账号或私有凭据。</small></label>}
+        {config.sourceMode !== "official" && <label>公共 GitHub 镜像<select value={config.mirrorUrl || "https://gh-proxy.com/"} onChange={(e) => setConfig({ ...config, mirrorUrl: e.target.value })}>{publicMirrors.map((host) => <option key={host} value={`https://${host}/`}>{host}</option>)}</select><small>程序自动拼接完整公共仓库地址。第三方服务不保证长期可用；不会向代理发送账号或私有凭据。</small></label>}
         <label>浏览器访问端口<input type="number" min="1024" max="65535" required value={config.port} onChange={(e) => setConfig({ ...config, port: Number(e.target.value) })}/><small>保持端口不变可保留同一浏览器缓存作用域；更改前请停止服务。</small></label>
         <label className="checkbox"><input type="checkbox" checked={config.openBrowser} onChange={(e) => setConfig({ ...config, openBrowser: e.target.checked })}/>服务就绪后自动打开默认浏览器</label>
         <div><label className="checkbox"><input type="checkbox" checked={config.autoUpdate.enabled} aria-describedby="auto-help" onChange={(e) => setConfig({ ...config, autoUpdate: { ...config.autoUpdate, enabled: e.target.checked } })}/>后台自动拉取更新</label><small id="auto-help">到设定时间，启动器会在后台只下载与上一版不同的文件并构建新版本，服务保持运行。构建完成后只提示，由你停止服务后再切换。仅在启动器打开时执行，错过的时间会在下次打开时补做。</small></div>

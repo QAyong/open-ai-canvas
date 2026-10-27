@@ -1,5 +1,6 @@
 //! Build an extracted, pinned public checkout; never run in a developer checkout.
 //! The caller owns archive verification/extraction, staging publication and the gateway.
+use crate::download;
 use anyhow::{bail, ensure, Context, Result};
 use fs2::FileExt;
 use reqwest::blocking::Client;
@@ -300,13 +301,38 @@ impl Builder {
         let target = self.cache.join(name);
         if target.exists() && hash_file(&target)? == sha.to_ascii_lowercase() { return Ok(target); }
         self.log.line(&format!("[toolchains] downloading {name} (limit 500 MiB, SHA-256 required)"));
-        let data = self.get(url, MAX_DOWNLOAD)?;
-        ensure!(hex::encode(Sha256::digest(&data)) == sha.to_ascii_lowercase(), "官方工具 SHA-256 校验失败");
-        let tmp = target.with_extension("download");
-        fs::write(&tmp, data)?;
-        if target.exists() { fs::remove_file(&target)?; }
-        fs::rename(tmp, &target)?;
-        Ok(target)
+        let expected = sha.to_ascii_lowercase();
+        let mut errors = Vec::new();
+        let last = std::cell::Cell::new(Instant::now());
+        for selected in dependency_candidates(url, self.mirror)? {
+            // Resume only from the same source: mirrors may not serve byte-identical files.
+            let part = self.cache.join(format!("{name}.{}.part", &hex::encode(Sha256::digest(selected.as_bytes()))[..12]));
+            let report = |done: u64, total: Option<u64>| {
+                if last.get().elapsed() >= Duration::from_secs(5) {
+                    self.log.line(&format!("[toolchains] {name}: {} / {} MiB", done / 1024 / 1024, total.map(|t| (t / 1024 / 1024).to_string()).unwrap_or_else(|| "?".into())));
+                    last.set(Instant::now());
+                }
+            };
+            let attempt = download::fetch_to_file(&self.client, &selected, &part, &download::Options::new(MAX_DOWNLOAD), &report)
+                .and_then(|_| {
+                    if hash_file(&part)? == expected { Ok(()) } else {
+                        let _ = fs::remove_file(&part);
+                        bail!("官方工具 SHA-256 校验失败")
+                    }
+                });
+            match attempt {
+                Ok(()) => {
+                    if target.exists() { fs::remove_file(&target)?; }
+                    fs::rename(&part, &target)?;
+                    return Ok(target);
+                }
+                Err(error) => {
+                    self.log.line(&format!("[toolchains] source failed, trying the next one: {error:#}"));
+                    errors.push(format!("{error:#}"));
+                }
+            }
+        }
+        bail!("工具下载失败（已尝试全部来源）：{}；可检查网络或在设置中切换镜像模式", errors.join("；"))
     }
 
     fn unpack(&self, archive: &Path, target: &Path) -> Result<()> {
@@ -705,8 +731,8 @@ mod tests {
     fn dependency_mirrors_are_opt_in() {
         let github = "https://api.github.com/repos/oven-sh/bun/releases/tags/bun-v1.3.9";
         let all = dependency_candidates(github, true).unwrap();
-        assert_eq!(all.len(), 3);
-        assert!(all[0].starts_with("https://gh-proxy.com/") && all.iter().any(|u| u.starts_with("https://ghfast.top/")) && all.iter().any(|u| u.starts_with("https://ghproxy.net/")));
+        assert_eq!(all.len(), crate::core::PUBLIC_MIRRORS.len());
+        assert!(all[0].starts_with("https://gh-proxy.com/") && all.iter().any(|u| u.starts_with("https://gh.idayer.com/")) && all.iter().any(|u| u.starts_with("https://ghproxy.net/")));
         assert_eq!(dependency_candidates(github, false).unwrap(), vec![github.to_string()]);
         assert_eq!(dependency_candidates("https://go.dev/dl/go1.26.7.windows-amd64.zip", true).unwrap().len(), 1);
         assert_eq!(dependency_url(github, false).unwrap(), github);

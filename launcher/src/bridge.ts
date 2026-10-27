@@ -3,6 +3,8 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 export type AutoUpdate = { enabled: boolean; schedule: "daily" | "interval"; time: string; intervalHours: number };
 export const defaultAutoUpdate: AutoUpdate = { enabled: false, schedule: "daily", time: "03:00", intervalHours: 24 };
 export type Config = { sourceMode: "auto" | "official" | "mirror"; officialUrl: string | null; mirrorUrl: string | null; port: number; openBrowser: boolean; autoUpdate: AutoUpdate };
+/** Must match `PUBLIC_MIRRORS` in src-tauri/src/core.rs. The first entry is the default. */
+export const publicMirrors = ["gh-proxy.com", "gh-proxy.org", "gh.idayer.com", "cors.isteed.cc", "ghfast.top", "ghproxy.net"] as const;
 export type Installed = { version: string; commit: string; [key: string]: unknown };
 export type Status = { config: Config; installed: Installed | null; running: boolean; pid: number | null; url: string; platform: string; repositoryUrl: string; recoveryRequired?: boolean; preparing: boolean; prepared: { version: string; commit: string } | null; autoRecord: { lastCheck: number; lastResult: string } };
 export type UpdateInfo = { available: boolean; canInstall: boolean; reason: string | null; source: string; manifest: { version: string; commit: string; releaseNotes: string; migration: { dataSchema: number; requiresMigration: boolean } } };
@@ -46,6 +48,6 @@ export function validateConfig(config: Config): string | null {
     catch { return "下载源地址格式不正确。"; }
   }
   if (config.officialUrl && config.officialUrl.replace(/\/$/, "") !== "https://github.com/ddcat-ai/open-ai-canvas") return "当前版本固定使用影策上游公共仓库。";
-  if (config.mirrorUrl && !["https://ghproxy.net/", "https://ghfast.top/", "https://gh-proxy.com/"].includes(config.mirrorUrl)) return "请选择支持的公共 GitHub 镜像。";
+  if (config.mirrorUrl && !publicMirrors.map((host) => `https://${host}/`).includes(config.mirrorUrl)) return "请选择支持的公共 GitHub 镜像。";
   return null;
 }

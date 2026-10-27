@@ -20,7 +20,53 @@ use std::{
 /// Above these a full archive is cheaper than many small requests.
 pub const MAX_FILES: usize = 1500;
 pub const MAX_BYTES: u64 = 96 * 1024 * 1024;
-const WORKERS: usize = 6;
+/// A first install has no base to diff against, so it is allowed to fetch the whole filtered tree.
+pub const SCRATCH_MAX_FILES: usize = 8000;
+pub const SCRATCH_MAX_BYTES: u64 = 192 * 1024 * 1024;
+pub const UPDATE_WORKERS: usize = 6;
+pub const SCRATCH_WORKERS: usize = 12;
+
+/// Payment plugins whose `backend/provider*` executables the launcher compiles for this platform.
+const REBUILT_PAYMENT_PLUGINS: [&str; 5] = [
+    "official-payment-wechat-native",
+    "official-payment-alipay-page",
+    "official-payment-xunhupay",
+    "official-payment-zhifufm",
+    "official-payment-epay",
+];
+
+/// Whether the source build reads `path`. The skipped files are ~2/3 of the repository by size:
+/// a committed macOS server binary, prebuilt `.yingce-plugin` packages, cross-platform payment
+/// binaries (the builder recompiles the current platform's), and docs / screenshots / launcher
+/// sources. `assets/user-*` stay because the web build globs them.
+pub fn is_needed(path: &str) -> bool {
+    let mut parts = path.split('/');
+    let first = parts.next().unwrap_or("");
+    match first {
+        ".github" | "docs" | "launcher" => return false,
+        "assets" => return path.starts_with("assets/user-"),
+        "backend" if path == "backend/server" => return false,
+        "plugin-packages" => {
+            let rest: Vec<&str> = parts.collect();
+            if rest.len() == 1 && rest[0].ends_with(".yingce-plugin") {
+                return false;
+            }
+            if rest.len() == 3
+                && REBUILT_PAYMENT_PLUGINS.contains(&rest[0])
+                && rest[1] == "backend"
+                && rest[2].starts_with("provider")
+            {
+                return false;
+            }
+        }
+        _ => {}
+    }
+    true
+}
+
+pub fn filter_needed(tree: Vec<TreeEntry>) -> Vec<TreeEntry> {
+    tree.into_iter().filter(|e| is_needed(&e.path)).collect()
+}
 
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct Plan {
@@ -32,6 +78,10 @@ pub struct Plan {
 impl Plan {
     pub fn within_limits(&self) -> bool {
         self.download.len() <= MAX_FILES && self.bytes <= MAX_BYTES
+    }
+
+    pub fn within_scratch_limits(&self) -> bool {
+        self.download.len() <= SCRATCH_MAX_FILES && self.bytes <= SCRATCH_MAX_BYTES
     }
 }
 
@@ -135,6 +185,7 @@ fn prune_empty_parents(root: &Path, mut dir: &Path) {
 pub fn apply(
     root: &Path,
     plan: &Plan,
+    workers: usize,
     fetch: &(dyn Fn(&TreeEntry) -> Result<Vec<u8>> + Sync),
     progress: &(dyn Fn(usize, usize) + Sync),
 ) -> Result<()> {
@@ -151,7 +202,7 @@ pub fn apply(
     let failure: Mutex<Option<anyhow::Error>> = Mutex::new(None);
     let total = plan.download.len();
     std::thread::scope(|scope| {
-        for _ in 0..WORKERS.min(total.max(1)) {
+        for _ in 0..workers.max(1).min(total.max(1)) {
             scope.spawn(|| loop {
                 if failure.lock().map(|f| f.is_some()).unwrap_or(true) {
                     return;
@@ -314,7 +365,7 @@ mod tests {
                 other => anyhow::bail!("unexpected fetch {other}"),
             })
         };
-        apply(&root, &plan, &fetch, &|_, _| {}).unwrap();
+        apply(&root, &plan, UPDATE_WORKERS, &fetch, &|_, _| {}).unwrap();
         verify(&root, &new).unwrap();
         assert!(!root.join("gone").exists(), "empty directories are pruned");
         let archive = root.with_extension("zip");
@@ -334,7 +385,7 @@ mod tests {
             bytes: 8,
         };
         let tampered = |_: &TreeEntry| -> Result<Vec<u8>> { Ok(b"tampered".to_vec()) };
-        assert!(apply(&root, &wrong, &tampered, &|_, _| {}).is_err());
+        assert!(apply(&root, &wrong, UPDATE_WORKERS, &tampered, &|_, _| {}).is_err());
         assert!(!root.join("a.txt").exists());
         for path in ["../escape", "/abs", "a\\b", "c:/x", "a/../b"] {
             let unsafe_plan = Plan {
@@ -343,9 +394,42 @@ mod tests {
                 bytes: 1,
             };
             let fetch = |_: &TreeEntry| -> Result<Vec<u8>> { Ok(b"x".to_vec()) };
-            assert!(apply(&root, &unsafe_plan, &fetch, &|_, _| {}).is_err(), "{path}");
+            assert!(apply(&root, &unsafe_plan, UPDATE_WORKERS, &fetch, &|_, _| {}).is_err(), "{path}");
         }
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn build_irrelevant_files_are_not_downloaded() {
+        for skipped in [
+            "backend/server",
+            "docs/index.md",
+            "launcher/src-tauri/src/core.rs",
+            ".github/workflows/launcher.yml",
+            "assets/panda.jpg",
+            "plugin-packages/a6api.yingce-plugin",
+            "plugin-packages/official-payment-epay/backend/provider",
+            "plugin-packages/official-payment-epay/backend/provider-windows-amd64.exe",
+        ] {
+            assert!(!is_needed(skipped), "{skipped}");
+        }
+        for needed in [
+            "backend/go.mod",
+            "backend/cmd/server/main.go",
+            "web/bun.lock",
+            "web/public/logo.svg",
+            "assets/user-sikongyue.png",
+            "CHANGELOG.md",
+            "VERSION",
+            "plugin-packages/official-payment-epay/manifest.json",
+            "plugin-packages/official-payment-epay/docs/interface.md",
+            "plugin-packages/embed-documentation.mjs",
+            "plugin-packages/a6api/manifest.json",
+            // Not rebuilt by the launcher, so its prebuilt executable must stay.
+            "plugin-packages/other-plugin/backend/provider",
+        ] {
+            assert!(is_needed(needed), "{needed}");
+        }
     }
 
     #[test]
