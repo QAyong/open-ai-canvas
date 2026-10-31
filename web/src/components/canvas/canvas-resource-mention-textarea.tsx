@@ -10,7 +10,19 @@ import { useAssetStore } from "@/stores/use-asset-store";
 import { useResolvedCanvasResourceReferences } from "./use-resolved-canvas-resource-references";
 import { InlineReferencePreview, referencePreviewUrl, syncInlineMentionPreviews } from "./canvas-mention-chips";
 import { MentionMenu, clamp, mentionCaretRect } from "./canvas-mention-menu";
-import { getEditableSelection, renderEditableContent, serializeEditableValue, setEditableSelection } from "./canvas-mention-editable";
+import { MentionHoverPreview, useMentionHoverPreview } from "./canvas-mention-hover-preview";
+import {
+    editableMentionTokenEndingAt,
+    getEditableSelection,
+    hasMentionTokenBoundary,
+    redrawEditableParts,
+    renderEditableContent,
+    repairEditableMentionBoundaries,
+    serializeEditableSelection,
+    serializeEditableValue,
+    setEditableSelection,
+    staleEditableMentionParts,
+} from "./canvas-mention-editable";
 import { mapCanvasTextOffset, mergeCanvasText } from "@/lib/canvas/canvas-text-merge";
 
 export { TOOL_ICON_MAP } from "./canvas-mention-chips";
@@ -52,6 +64,7 @@ type Props = Omit<TextareaHTMLAttributes<HTMLTextAreaElement>, "onChange" | "val
     activeDropReferenceId?: string | null;
     onReferenceFilesDrop?: (reference: CanvasResourceReference, files: File[]) => void;
     autoLinkEnabled?: boolean;
+    mentionMenuLabels?: { connected?: string; search?: string };
 };
 
 // 回车提交语义由调用方决定：false 只在 ⌘/Ctrl+Enter 提交，"both" 两种都提交；Shift+Enter 始终换行。
@@ -64,7 +77,7 @@ function shouldSubmitOnEnter(event: { key: string; ctrlKey: boolean; metaKey: bo
 }
 
 export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Props>(function CanvasResourceMentionTextarea(
-    { value, references, onSelectReference, onChange, onSubmit, onKeyDown, className, containerClassName, style, highlightLabels = true, mentionMenuWidth = 320, sendOnEnter = true, onContentSizeChange, includeAssetLibrary = false, activeDropReferenceId, onReferenceFilesDrop, autoLinkEnabled = false, ...props },
+    { value, references, onSelectReference, onChange, onSubmit, onKeyDown, className, containerClassName, style, highlightLabels = true, mentionMenuWidth = 320, sendOnEnter = true, onContentSizeChange, includeAssetLibrary = false, activeDropReferenceId, onReferenceFilesDrop, autoLinkEnabled = false, mentionMenuLabels, ...props },
     forwardedRef,
 ) {
     const rawTheme = useActiveTheme();
@@ -107,6 +120,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         return [...activeCanvasReferences, ...assetReferences.filter((item) => value.includes(canvasResourceMentionToken(item)))];
     }, [activeCanvasReferences, assetReferences, highlightLabels, value]);
     const useRichEditor = Boolean(activeReferences.length);
+    const hoverPreview = useMentionHoverPreview(activeReferences);
     const autoLinkMatch = useMemo<CanvasResourceAutoLinkMatch | null>(() => autoLinkEnabled && autoLinkCursor !== null ? findCanvasResourceAutoLinkMatch(value, autoLinkCursor, activeCanvasReferences) : null, [activeCanvasReferences, autoLinkCursor, autoLinkEnabled, value]);
     const reportContentSize = useCallback((element: HTMLElement | null) => {
         if (!element || !onContentSizeChange) return;
@@ -134,8 +148,13 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         const isFocused = document.activeElement === editor;
         const currentValue = serializeEditableValue(editor);
         if (currentValue === value && lastRenderedValueRef.current === value) {
-            syncInlineMentionPreviews(editor, activeReferences);
             pendingSelectionRef.current = null;
+            // 文本没变也要核对胶囊：引用晚到、换了指向或刚输完 @图片1 时，DOM 里的文字/胶囊已经过期。
+            const selection = isFocused ? getEditableSelection(editor) : null;
+            const staleParts = staleEditableMentionParts(editor, value, activeReferences, selection && selection.start === selection.end ? selection.start : null);
+            if (staleParts) redrawEditableParts(editor, staleParts, selection);
+            else syncInlineMentionPreviews(editor, activeReferences);
+            if (staleParts) reportContentSize(editor);
             return;
         }
         const currentSelection = isFocused ? getEditableSelection(editor)?.start ?? null : null;
@@ -273,12 +292,15 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         updateValue(next, mention.start + insertText.length);
     };
 
-    const replaceEditableSelection = (insertText: string) => {
+    const replaceEditableSelection = (rawInsertText: string) => {
         const currentValue = editorRef.current ? serializeEditableValue(editorRef.current) : value;
         const textarea = textareaRef.current;
         const selection = getEditableSelection(editorRef.current)
             || (textarea ? { start: textarea.selectionStart, end: textarea.selectionEnd } : null)
             || { start: currentValue.length, end: currentValue.length };
+        // 紧贴胶囊粘贴时与键入一致：会和令牌粘连的内容前补空格，胶囊不变回文字。
+        const chipToken = editorRef.current && rawInsertText ? editableMentionTokenEndingAt(editorRef.current, selection.start) : null;
+        const insertText = chipToken && !hasMentionTokenBoundary(chipToken, rawInsertText, 0) ? ` ${rawInsertText}` : rawInsertText;
         const next = `${currentValue.slice(0, selection.start)}${insertText}${currentValue.slice(selection.end)}`;
         const cursor = selection.start + insertText.length;
         if (!updateValue(next, cursor)) return;
@@ -298,7 +320,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
             ref={autoLinkSuggestionRef}
             type="button"
             data-canvas-no-zoom
-            className="fixed z-[var(--z-tooltip)] inline-flex max-w-[min(360px,calc(100vw-24px))] items-center gap-1.5 rounded-md border border-current/15 px-2 py-1 text-[var(--fs-micro)] shadow-sm"
+            className="fixed z-[var(--z-tooltip)] inline-flex max-w-[min(360px,calc(100vw-24px))] items-center gap-2 rounded-md border border-current/15 px-2 py-1 text-[var(--fs-micro)] shadow-sm"
             style={{ ...autoLinkPosition, visibility: autoLinkPosition ? "visible" : "hidden", background: theme.node.panel, color: theme.node.text }}
             onPointerDown={(event) => event.stopPropagation()}
             onMouseDown={(event) => { event.preventDefault(); event.stopPropagation(); }}
@@ -315,6 +337,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
         if (readOnly || composingRef.current) return;
         const editor = editorRef.current;
         if (!editor) return;
+        repairEditableMentionBoundaries(editor);
         const next = serializeEditableValue(editor);
         const cursor = getEditableSelection(editor)?.start ?? next.length;
         if (onChange(next) === false) {
@@ -366,6 +389,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
             onQueryChange={(query) => setMention((current) => current ? { ...current, query } : current)}
             onClose={closeMention}
             onSelect={insertReference}
+            labels={mentionMenuLabels}
         />
     ) : null;
 
@@ -405,6 +429,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
                         props.onCompositionStart?.(event as unknown as React.CompositionEvent<HTMLTextAreaElement>);
                     }}
                     onCompositionEnd={(event) => {
+                        repairEditableMentionBoundaries(event.currentTarget);
                         const local = serializeEditableValue(event.currentTarget);
                         const cursor = getEditableSelection(event.currentTarget)?.start ?? local.length;
                         const merged = mergeCanvasText(compositionBaseRef.current, value, local);
@@ -417,6 +442,19 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
                     onPaste={(event: ClipboardEvent<HTMLDivElement>) => {
                         event.preventDefault();
                         replaceEditableSelection(event.clipboardData.getData("text/plain"));
+                    }}
+                    onCopy={(event: ClipboardEvent<HTMLDivElement>) => {
+                        const text = serializeEditableSelection(event.currentTarget);
+                        if (text === null) return;
+                        event.preventDefault();
+                        event.clipboardData.setData("text/plain", text);
+                    }}
+                    onCut={(event: ClipboardEvent<HTMLDivElement>) => {
+                        const text = serializeEditableSelection(event.currentTarget);
+                        if (text === null) return;
+                        event.preventDefault();
+                        event.clipboardData.setData("text/plain", text);
+                        if (!readOnly) replaceEditableSelection("");
                     }}
                     onDragOver={(event: DragEvent<HTMLDivElement>) => {
                         const reference = referenceForDropTarget(event.target);
@@ -449,6 +487,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
                         props.onDrop?.(event as unknown as React.DragEvent<HTMLTextAreaElement>);
                     }}
                     onKeyDown={(event: KeyboardEvent<HTMLDivElement>) => {
+                        hoverPreview.dismiss();
                         if (readOnly) { onKeyDown?.(event as unknown as React.KeyboardEvent<HTMLTextAreaElement>); return; }
                         if (event.key === "Enter" && (event.nativeEvent.isComposing || composingRef.current || event.keyCode === 229)) return;
                         if (autoLinkMatch && event.key === "Tab" && !event.shiftKey && !event.nativeEvent.isComposing && !composingRef.current) {
@@ -495,8 +534,14 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
                         props.onKeyUp?.(event as unknown as React.KeyboardEvent<HTMLTextAreaElement>);
                     }}
                     onMouseDown={(event) => props.onMouseDown?.(event as unknown as React.MouseEvent<HTMLTextAreaElement>)}
-                    onPointerDown={(event) => props.onPointerDown?.(event as unknown as React.PointerEvent<HTMLTextAreaElement>)}
+                    onPointerDown={(event) => {
+                        hoverPreview.dismiss();
+                        props.onPointerDown?.(event as unknown as React.PointerEvent<HTMLTextAreaElement>);
+                    }}
+                    onPointerOver={hoverPreview.onPointerOver}
+                    onPointerOut={hoverPreview.onPointerOut}
                     onDoubleClick={(event) => {
+                        hoverPreview.dismiss();
                         const chip = event.target instanceof Element ? event.target.closest<HTMLElement>("[data-mention-reference-id]") : null;
                         const reference = chip ? availableReferences.find((item) => item.id === chip.dataset.mentionReferenceId) : undefined;
                         if (!reference || !referencePreviewUrl(reference)) return;
@@ -528,6 +573,7 @@ export const CanvasResourceMentionTextarea = forwardRef<HTMLTextAreaElement, Pro
                 </div>
                 {autoLinkSuggestion}
                 {menu}
+                {hoverPreview.target && !previewReference ? <MentionHoverPreview target={hoverPreview.target} /> : null}
                 {previewReference ? <InlineReferencePreview reference={previewReference} onClose={() => setPreviewReference(null)} /> : null}
             </div>
         );

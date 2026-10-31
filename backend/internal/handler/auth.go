@@ -191,7 +191,12 @@ func RegisterAuthRoutes(r *gin.RouterGroup, svc *service.Service) {
 			failService(c, err)
 			return
 		}
-		ok(c, gin.H{"user": publicUser, "runtimeLimits": limits, "drawingEngine": drawingEngine, "features": features})
+		referralAvailable, err := svc.ReferralAvailable(user)
+		if err != nil {
+			failService(c, err)
+			return
+		}
+		ok(c, gin.H{"user": publicUser, "userGroup": svc.PublicUserGroupFor(user), "runtimeLimits": limits, "drawingEngine": drawingEngine, "features": features, "referralAvailable": referralAvailable})
 	})
 	r.GET("/channels/system", func(c *gin.Context) {
 		actor, err := currentUser(c, svc)
@@ -249,6 +254,7 @@ func linuxDOCallbackHandler(svc *service.Service) gin.HandlerFunc {
 
 func RegisterAdminRoutes(r *gin.RouterGroup, svc *service.Service) {
 	registerAdminUserRoutes(r, svc)
+	registerAdminUserGroupRoutes(r, svc)
 	registerAdminChannelRoutes(r, svc)
 	registerAdminSettingRoutes(r, svc)
 	registerAdminAPILogRoutes(r, svc)
@@ -318,7 +324,7 @@ func shortSystemProxyPath(rawPath string) (string, string, bool) {
 // as a channel request when a business route returns 404.
 func isReservedAPIPathPrefix(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "admin", "agent", "ai", "announcements", "banner-announcements", "assets", "auth", "canvas-projects", "channels", "diagnostics", "features", "files", "model-catalog", "models", "oauth", "plugins", "projects", "public", "resources", "sessions", "settings", "skills", "style-profiles", "tasks", "timeline", "user-data", "voice-profiles", "wallet":
+	case "admin", "agent", "ai", "announcements", "banner-announcements", "assets", "auth", "canvas-projects", "channels", "diagnostics", "dramas", "features", "files", "model-catalog", "models", "oauth", "plugins", "projects", "public", "resources", "sessions", "settings", "skills", "style-profiles", "tasks", "timeline", "user-data", "voice-profiles", "wallet":
 		return true
 	default:
 		return false
@@ -331,6 +337,11 @@ func proxySystemRequest(c *gin.Context, svc *service.Service, user *model.User, 
 
 func proxySystemRequestPath(c *gin.Context, svc *service.Service, user *model.User, channel *model.ModelChannel, providerPath string) {
 	startedAt := time.Now()
+	// 分组只能使用绑定的系统渠道；中转入口与任务准入同样失败关闭。
+	if err := svc.RequireUserChannelAccess(user, channel.ID); err != nil {
+		failService(c, err)
+		return
+	}
 	policy, available := loadRuntimePolicy(c, svc)
 	if !available || !enforceRateLimit(c, "system-proxy:"+user.ID, policy.Request.SystemRelayPerMinute, time.Minute) {
 		return

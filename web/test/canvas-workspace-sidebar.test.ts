@@ -15,7 +15,7 @@ test("canvas removes the standalone asset tray while retaining sidebar assets an
 
 test("workspace keeps a permanent rail and independent task/history entries", () => {
     const source = component("canvas-workspace-panel.tsx");
-    for (const label of ["主页", "节点", "资产", "任务", "历史"]) expect(source).toContain(label);
+    for (const label of ["主页", "节点", "素材库", "任务", "历史"]) expect(source).toContain(label);
     expect(source).not.toContain('id: "tools"');
     expect(source).not.toContain("CanvasWorkspaceToolPanel");
     expect(source).not.toContain("onInsertTool");
@@ -75,7 +75,7 @@ test("workspace starts collapsed and keeps separated navigation and bottom toggl
 test("rail inherits canvas dock colors from the workspace shell", () => {
     const panel = component("canvas-workspace-panel.tsx");
     expect(panel).toContain("canvasThemes[useActiveTheme()]");
-    expect(panel).toContain('className="canvas-workspace-shell" style={{ ...canvasDockStyle(theme)');
+    expect(panel).toContain('className={`canvas-workspace-shell ${open && screens.lg ? "is-expanded" : ""}`} style={{ ...canvasDockStyle(theme)');
     expect(panel).toContain("background: undefined");
     expect(panel).not.toContain('boxShadow: "none"');
     const railCss = component("canvas-workspace-panel.css").split(".canvas-workspace-rail {")[1];
@@ -102,9 +102,13 @@ test("editor rail and expanded panel share one restrained glass surface without 
     expect(styles).toContain(".canvas-workspace-zoom-controls");
     expect(styles).toContain(".canvas-main-with-workspace > .canvas-project-sidebar {\n        margin-left: var(--space-16);");
     expect(styles).toContain(".canvas-main-with-workspace:has(> .canvas-project-sidebar) .canvas-topbar");
-    expect(panel).not.toContain("canvas-workspace-rail-divider");
+    // 只允许“主页”与“展开”前的短分隔，不能回到整列硬分隔线。
+    expect(panel).toContain('<span className="canvas-workspace-rail-divider" aria-hidden />');
+    expect(panel).toContain('<span className="canvas-workspace-rail-divider is-end" aria-hidden />');
     expect(panel).not.toContain("<strong>工作区</strong>");
-    expect(styles).not.toContain(".canvas-workspace-rail-divider");
+    const dividerCss = styles.split(".canvas-workspace-rail-divider {")[1]?.split("}")[0] ?? "";
+    expect(dividerCss).toContain("width: var(--space-6)");
+    expect(dividerCss).toContain("background: color-mix(in srgb, currentColor 12%, transparent)");
     expect(styles).not.toContain("border-right: 1px solid var(--dock-border)");
     expect(styles).not.toContain('canvas-workspace-rail-button[aria-pressed="true"]::before');
     expect(styles).toContain("margin: var(--space-2) 0 var(--space-2) var(--space-2)");
@@ -116,6 +120,7 @@ test("editor rail and expanded panel share one restrained glass surface without 
     expect(styles).toContain("border-radius: var(--r-2xl)");
     expect(styles).not.toContain("border-radius: calc(var(--radius) * 3.5)");
     expect(page).toContain('workspaceOpen ? "canvas-workspace-expanded" : ""');
-    expect(styles).not.toContain("backdrop-filter: none");
+    // 短剧精修画布的无底板工具条（.is-bare，文件末尾）是唯一允许关闭模糊的规则；轨道与展开面板仍保持玻璃材质。
+    expect(styles.split(".canvas-floating-dock.is-bare")[0]).not.toContain("backdrop-filter: none");
     expect(styles).not.toContain("box-shadow: none");
 });

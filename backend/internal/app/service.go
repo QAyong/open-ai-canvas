@@ -46,6 +46,8 @@ type Service struct {
 	characterTaskMu          sync.Mutex
 	activeCancels            map[string]context.CancelFunc
 	pendingStorage           map[string]int64
+	storageStatusMu          sync.Mutex
+	storageStatusCache       map[string]storageStatusEntry
 	coordinator              *platform.Coordinator
 	platform                 *platform.Service
 	taskBillingCoordinator   *taskBillingCoordinator
@@ -93,6 +95,8 @@ type Service struct {
 	// legacyCloudAgentRootTask is enabled only by tests that exercise the pre-Pi
 	// model-worker path. Runtime availability must not change root task semantics.
 	legacyCloudAgentRootTask bool
+	// cloudAgentModelRetryBase 是模型步骤重试的指数退避基数；零值为 1 秒，只有测试会调小。
+	cloudAgentModelRetryBase time.Duration
 	approvedMediaMu          sync.Mutex
 	approvedMediaWg          sync.WaitGroup
 	approvedMediaWaiters     map[string]context.CancelFunc
@@ -102,9 +106,15 @@ type Service struct {
 	creditPolicyMu           sync.RWMutex
 	creditPolicyCache        *CreditPolicy
 	creditPolicyAt           time.Time
+	userGroups               userGroupState
 	modelAvailabilityMu      sync.RWMutex
 	modelAvailabilityCache   map[publicModelAvailabilityKey]*PublicModelAvailability
 	modelAvailabilityAt      time.Time
+	adminModelHealthMu       sync.Mutex
+	adminModelHealthCache    *AdminChannelModelHealthReport
+	// dramaTaskHook 只在测试中替换短剧调度的任务提交，生产路径始终走 CreateTask 准入。
+	dramaTailFrameHook func(userID, resourceID string) (string, error)
+	dramaTaskHook      func(userID string, req CreateTaskRequest, timeline *renderProject) (*model.Task, error)
 }
 
 const taskWorkerConcurrency = 3
@@ -186,9 +196,11 @@ func (s *Service) StartWorker() {
 	}
 	s.taskWorker().start(ctx)
 	s.startResourceDeletionWorker(ctx)
+	s.startResourceOffloadWorker()
 	s.startSkillSyncWorker(ctx)
 	s.startPaymentWorker(ctx)
 	s.startBillingAutoRefundWorker()
+	s.startDramaScheduler()
 	go s.syncAgentSessionLimit()
 	s.runWorkerLoop(func(ctx context.Context) {
 		ticker := time.NewTicker(3 * time.Second)

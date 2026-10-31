@@ -6,6 +6,7 @@ import localforage from "localforage";
 import { apiClient } from "@/services/api/request";
 import { deleteAssetsWithRemoteSync, initializeRemoteUserDataSession, loadAssetLibraryPage, loadAssetsForUse, resetRemoteUserDataSync, saveRemoteUserDataNow } from "@/services/user-data-sync";
 import { flushAssetStorePersistence, useAssetStore, type Asset } from "@/stores/use-asset-store";
+import { useCanvasStore } from "@/stores/canvas/use-canvas-store";
 import { appQueryClient } from "@/lib/query-client";
 
 const originalAdapter = apiClient.defaults.adapter;
@@ -58,6 +59,8 @@ beforeEach(async () => {
             localStorage: { getItem: (key: string) => storage.get(key) ?? null, setItem: (key: string, value: string) => storage.set(key, value), removeItem: (key: string) => storage.delete(key) },
         },
     });
+    // 同一 bun 进程里其他测试文件可能留下画布；saveRemoteUserDataNow 会把它们当作待保存画布发出 PATCH。
+    useCanvasStore.setState({ projects: [] });
     useAssetStore.setState({ assets: [] });
     await flushAssetStorePersistence();
     await initializeRemoteUserDataSession("batch-test-user");
@@ -272,7 +275,7 @@ describe("素材批量删除", () => {
     test("素材页和选择器的批量及清空入口使用数组同步方法", () => {
         const page = readFileSync(new URL("../src/pages/assets/index.tsx", import.meta.url), "utf8");
         const picker = readFileSync(new URL("../src/components/assets/asset-library-picker-modal.tsx", import.meta.url), "utf8");
-        expect(page).toContain("deleteAssetsWithRemoteSync(trashAssets.map");
+        expect(page).toContain("deleteAssetsWithRemoteSync(batch)");
         expect(page).toContain("const ids = [...selectedIds]");
         expect(page).toContain("deleteAssetsWithRemoteSync(ids)");
         expect(page).not.toContain("validAssets.filter((asset) => selectedIds.includes(asset.id))");

@@ -37,6 +37,8 @@ type (
 	APICallLogQuery                        = app.APICallLogQuery
 	AccountFileStorageUsage                = app.AccountFileStorageUsage
 	AdminAppearanceSetting                 = app.AdminAppearanceSetting
+	AdminStorageGrantRequest               = app.AdminStorageGrantRequest
+	AdminUserStorage                       = app.AdminUserStorage
 	AdminAuditPage                         = app.AdminAuditPage
 	AdminCacheClearGroupResult             = app.AdminCacheClearGroupResult
 	AdminCacheClearRequest                 = app.AdminCacheClearRequest
@@ -311,6 +313,9 @@ type (
 	SkillListRequest                       = app.SkillListRequest
 	SkillMutationRequest                   = app.SkillMutationRequest
 	SkillPackageBundle                     = app.SkillPackageBundle
+	SkillPackageEditRequest                = app.SkillPackageEditRequest
+	SkillPackageEditResult                 = app.SkillPackageEditResult
+	SkillPackageFileOperation              = app.SkillPackageFileOperation
 	SkillPackageBundleFile                 = app.SkillPackageBundleFile
 	SkillPackageFileContent                = app.SkillPackageFileContent
 	SkillPackageFileItem                   = app.SkillPackageFileItem
@@ -346,6 +351,7 @@ type (
 	TextReplayResult                       = app.TextReplayResult
 	TimelineRenderCreateRequest            = app.TimelineRenderCreateRequest
 	TimelineTranscriptionCreateRequest     = app.TimelineTranscriptionCreateRequest
+	RevokeStorageGrantRequest              = app.RevokeStorageGrantRequest
 	TopupProductRequest                    = app.TopupProductRequest
 	UpdateAnnouncementRequest              = app.UpdateAnnouncementRequest
 	UpdateBannerAnnouncementRequest        = app.UpdateBannerAnnouncementRequest
@@ -358,6 +364,10 @@ type (
 	UpdateProjectRequest                   = app.UpdateProjectRequest
 	UpdateProjectUnitRequest               = app.UpdateProjectUnitRequest
 	UpdateUserRequest                      = app.UpdateUserRequest
+	UserGroupRequest                       = app.UserGroupRequest
+	UserGroupView                          = app.UserGroupView
+	PublicUserGroup                        = app.PublicUserGroup
+	PaymentSettings                        = app.PaymentSettings
 	UpdateWorkflowStepRequest              = app.UpdateWorkflowStepRequest
 	WorkbenchToolInput                     = app.WorkbenchToolInput
 	WorkbenchPresetInput                   = app.WorkbenchPresetInput

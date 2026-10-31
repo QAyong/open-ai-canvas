@@ -14,12 +14,20 @@ export type PaymentProvider = {
 
 export type TopupSaleStrategy = "unlimited" | "periodic" | "inventory" | "timed";
 
+/** credits 发放积分；storage 扩容账号文件容量，storageDurationDays 为 0 表示永久。 */
+export type TopupProductKind = "credits" | "storage";
+
 export type TopupProduct = {
     id: string;
     name: string;
     description?: string;
+    kind: TopupProductKind;
+    /** 售价，单位是 currency 的最小单位（分 / 美分）。 */
     amountFen: number;
+    currency: PaymentCurrency;
     creditsMicrocredits: number;
+    storageBytes: number;
+    storageDurationDays: number;
     enabled: boolean;
     sortOrder: number;
     saleStrategy: TopupSaleStrategy;
@@ -45,10 +53,13 @@ export type PaymentOrder = {
     merchantOrderNo: string;
     productId: string;
     productName: string;
+    productKind: TopupProductKind;
     providerId: string;
     amountFen: number;
     currency: "CNY" | string;
     creditsMicrocredits: number;
+    storageBytes?: number;
+    storageDurationDays?: number;
     status: PaymentOrderStatus;
     providerStatus?: string;
     providerTradeNo?: string;
@@ -122,11 +133,30 @@ export function updateAdminPaymentProvider(id: string, input: { enabled: boolean
     return http.put<{ provider: AdminPaymentProvider }>(`/admin/payments/providers/${encodeURIComponent(id)}/config`, input);
 }
 
+export type PaymentCurrency = "CNY" | "USD";
+export type PaymentSettings = { defaultCurrency: PaymentCurrency };
+
+export function getPaymentSettings() {
+    return http.get<{ settings: PaymentSettings }>("/payments/settings");
+}
+export function getAdminPaymentSettings() {
+    return http.get<{ settings: PaymentSettings }>("/admin/payments/settings");
+}
+export function updateAdminPaymentSettings(input: PaymentSettings) {
+    return http.put<{ settings: PaymentSettings }>("/admin/payments/settings", input);
+}
+
+/** 按货币格式化最小单位金额：CNY → ¥12.00，USD → $12.00。 */
+export function formatPaymentAmount(amountMinor: number, currency?: string) {
+    const symbol = currency === "USD" ? "$" : "¥";
+    return `${symbol}${(amountMinor / 100).toLocaleString("zh-CN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export function listAdminTopupProducts() {
     return http.get<{ products: TopupProduct[] }>("/admin/payments/products");
 }
 
-export type TopupProductInput = Pick<TopupProduct, "name" | "amountFen" | "creditsMicrocredits" | "enabled" | "sortOrder" | "saleStrategy"> & {
+export type TopupProductInput = Pick<TopupProduct, "name" | "kind" | "amountFen" | "currency" | "creditsMicrocredits" | "storageBytes" | "storageDurationDays" | "enabled" | "sortOrder" | "saleStrategy"> & {
     description?: string;
     periodDays?: number;
     periodPurchaseLimit?: number;

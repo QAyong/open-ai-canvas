@@ -10,7 +10,7 @@ import { Select } from "@/components/ui/base/select";
 import { AssetFilterGroup, AssetsBatchBar, AssetsEmptyState, AssetDrawer } from "./asset-library-panels";
 import { DeleteButton } from "@/components/ui/base/buttons/delete-button";
 import { cn } from "@/lib/utils";
-import { WorkspaceState } from "@/components/layout/workspace-state";
+import { WorkspaceNoResultsState, WorkspaceState } from "@/components/layout/workspace-state";
 import { AssetCard } from "./asset-library-cards";
 import { Switch } from "@/components/ui/base/switch";
 import { resourceStorageTitle, resourceStorageLabel } from "@/lib/canvas/resource-storage-status";
@@ -27,7 +27,7 @@ import { downloadBrowserMedia } from "@/services/browser-download";
 import { flushAssetStorePersistence, useAssetStore, type AssetCategory, type AssetKind, type ImageAsset } from "@/stores/use-asset-store";
 import { loadAssetLibraryPage, loadAssetsForUse, saveRemoteUserDataNow, localSavedRemotePendingMessage, deleteAssetsWithRemoteSync, deleteAssetWithRemoteSync } from "@/services/user-data-sync";
 import { useUserStore } from "@/stores/use-user-store";
-import { createAssetFolder, deleteAssetFolder, listAssetFolders, updateAssetFolder, type AssetFolder, moveRemoteAssetsToFolder } from "@/services/api/user-data";
+import { createAssetFolder, deleteAssetFolder, listAssetFolders, listRemoteAssetsPage, updateAssetFolder, type AssetFolder, moveRemoteAssetsToFolder } from "@/services/api/user-data";
 import { assetCountMap, assetSearchText, readAssetGridDensity, assetKindIcons } from "./asset-library-format";
 import { ASSET_GRID_DENSITY_KEY, type LibraryAsset } from "./asset-library-format";
 import { selectAssetIds } from "./asset-library-selection";
@@ -430,12 +430,42 @@ export default function AssetsPage() {
         }
     };
 
-    const exportAllAssets = async () => {
-        if (!validAssets.length) {
-            message.warning("暂无素材可导出");
-            return;
+    const collectAllAssetIds = async (status: "active" | "archived") => {
+        if (!userId)
+            return useAssetStore
+                .getState()
+                .assets.filter((asset) => (asset.status === "archived") === (status === "archived"))
+                .map((asset) => asset.id);
+        // 先提交本机待保存素材，再固定完整集合；删除期间不继续翻页，避免页偏移漏项。
+        await flushAssetStorePersistence();
+        await saveRemoteUserDataNow([]);
+        const ids = new Set<string>();
+        for (let currentPage = 1; ; currentPage++) {
+            if (useUserStore.getState().user?.id !== userId) throw new Error("账号已切换，请重新操作素材库");
+            const result = await listRemoteAssetsPage({ page: currentPage, pageSize, status });
+            if (useUserStore.getState().user?.id !== userId) throw new Error("账号已切换，请重新操作素材库");
+            for (const asset of result.assets) ids.add(asset.id);
+            if (!result.hasMore) return [...ids];
         }
-        await exportAssets(validAssets);
+    };
+
+    const exportAllAssets = async () => {
+        if (batchWorking) return;
+        setBatchWorking(true);
+        try {
+            const ids = await collectAllAssetIds(viewMode === "trash" ? "archived" : "active");
+            if (!ids.length) {
+                message.warning("暂无素材可导出");
+                return;
+            }
+            await loadAssetsForUse(ids);
+            const byId = new Map(useAssetStore.getState().assets.map((asset) => [asset.id, asset]));
+            await exportAssets(ids.map((id) => byId.get(id)!));
+        } catch (error) {
+            message.error(error instanceof Error ? error.message : "导出失败");
+        } finally {
+            setBatchWorking(false);
+        }
     };
 
     const importAssetZip = async (file?: File) => {
@@ -483,14 +513,30 @@ export default function AssetsPage() {
     };
 
     const emptyTrash = async () => {
-        const count = trashAssets.length;
-        if (!count) return;
+        if (batchWorking) return;
+        setBatchWorking(true);
+        let deletedCount = 0;
         try {
-            await deleteAssetsWithRemoteSync(trashAssets.map((asset) => asset.id));
+            const ids = await collectAllAssetIds("archived");
+            if (!ids.length) {
+                message.info("回收站已为空");
+                return;
+            }
+            for (let offset = 0; offset < ids.length; offset += pageSize) {
+                if (useUserStore.getState().user?.id !== userId) throw new Error("账号已切换，请重新操作素材库");
+                const batch = ids.slice(offset, offset + pageSize);
+                await deleteAssetsWithRemoteSync(batch);
+                deletedCount += batch.length;
+            }
             setSelectedIds([]);
-            message.success(`已彻底清空回收站 ${count} 个素材`);
+            message.success(`已彻底清空回收站 ${deletedCount} 个素材`);
+            void invalidateAssetLibrary();
         } catch (error) {
-            message.error(error instanceof Error ? error.message : "清空回收站失败");
+            const reason = error instanceof Error ? error.message : "清空回收站失败";
+            if (deletedCount) message.warning(`已删除 ${deletedCount} 个素材，其余未完成：${reason}`);
+            else message.error(reason);
+        } finally {
+            setBatchWorking(false);
         }
     };
 
@@ -546,10 +592,11 @@ export default function AssetsPage() {
                         meta={<span className="app-projects-header-meta assets-header-meta">{totalAssets} 个素材</span>}
                         actions={
                             <div className="assets-header-actions">
+                                <AssetStorageUsage />
                                 <div className="assets-header-action-buttons">
                                     {viewMode === "trash" ? (
                                         <>
-                                            {trashAssets.length > 0 ? (
+                                            {userId || trashAssets.length > 0 ? (
                                                 <Popconfirm
                                                     title="确定清空回收站吗？"
                                                     description="清空后所有回收站素材及其文件将被彻底永久删除，不可恢复。"
@@ -558,7 +605,7 @@ export default function AssetsPage() {
                                                     okButtonProps={{ danger: true }}
                                                     cancelText="取消"
                                                 >
-                                                    <Button danger icon={<Trash2 className="size-3.5" />}>
+                                                    <Button danger loading={batchWorking} icon={<Trash2 className="size-3.5" />}>
                                                         清空回收站
                                                     </Button>
                                                 </Popconfirm>
@@ -589,7 +636,6 @@ export default function AssetsPage() {
                                         </>
                                     )}
                                 </div>
-                                <AssetStorageUsage />
                             </div>
                         }
                     />
@@ -702,7 +748,7 @@ export default function AssetsPage() {
                                         setSelectedIds([]);
                                     }}
                                 >
-                                    <span className="assets-filter-item-label flex items-center gap-1.5">
+                                    <span className="assets-filter-item-label flex items-center gap-2">
                                         <Trash2 className="size-3.5" />
                                         <span>回收站</span>
                                     </span>
@@ -743,7 +789,19 @@ export default function AssetsPage() {
                             ) : (
                                 <>
                                     {visibleAssets.length === 0 ? (
-                                        <WorkspaceState icon="assets" compact title="没有匹配的素材" description="调整关键词或左侧分类后再试。" />
+                                        <WorkspaceNoResultsState
+                                            icon="assets"
+                                            compact
+                                            query={keyword}
+                                            description="调整关键词或左侧分类，或清除筛选后查看全部。"
+                                            onClear={() => {
+                                                setKeyword("");
+                                                setKindFilter("all");
+                                                setCategoryFilter("all");
+                                                setFolderFilter("all");
+                                                setPage(1);
+                                            }}
+                                        />
                                     ) : (
                                         <CollectionGrid className="library-grid assets-library-grid" style={{ "--collection-grid-min-width": `${assetGridCardMinWidth[gridDensity]}px` } as React.CSSProperties}>
                                             {visibleAssets.map((asset) => (
@@ -897,7 +955,7 @@ export default function AssetsPage() {
                                 <Typography.Text strong ellipsis className="block">
                                     {title || "未命名素材"}
                                 </Typography.Text>
-                                <div className="mt-2 flex flex-wrap gap-1.5">
+                                <div className="mt-2 flex flex-wrap gap-2">
                                     {tags.length ? (
                                         tags.map((tag) => (
                                             <Tag key={tag} className="m-0">

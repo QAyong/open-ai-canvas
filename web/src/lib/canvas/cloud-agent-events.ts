@@ -147,6 +147,23 @@ export function applyAgentEvent(
         setPrompt?.((current) => (current.trim() ? current : text));
         return;
     }
+    if (event.type === "user_interjection_delivered") {
+        // 送达后已进入模型上下文，撤回入口必须消失。
+        const messageId = String(payload.messageId || "");
+        setMessages((current) => current.map((item) => (item.id === messageId && item.interjection === "sent" ? { ...item, interjection: "delivered" as const } : item)));
+        return;
+    }
+    if (event.type === "user_interjection_withdrawn") {
+        const messageId = String(payload.messageId || "");
+        setMessages((current) => current.map((item) => (item.id === messageId ? { ...item, interjection: "withdrawn" as const } : item)));
+        // 撤回的原话放回输入框，便于修改后重新插话；用户已经在输入新内容时不覆盖。
+        setPrompt?.((current) => (current.trim() ? current : text));
+        return;
+    }
+    if (event.type === "run_cancelled") {
+        setMessages((current) => appendUniqueMessage(current, { id: event.eventId, role: "system", text: text || "已停止本轮" }));
+        return;
+    }
     if (event.type === "context_compaction_requested") {
         const id = compactionMessageID(event, payload);
         const compactionId = typeof payload.compactionId === "string" ? payload.compactionId : undefined;
@@ -271,6 +288,33 @@ export function applyAgentEvent(
         setApproval((current) => ({ approvalId, detail: payload, reason: current?.approvalId === approvalId ? current.reason : "" }));
         return;
     }
+    if (event.type === "memory_updated") {
+        const revisionId = String(payload.revisionId || "");
+        const changes = Array.isArray(payload.changes)
+            ? (payload.changes as Array<Record<string, unknown>>).map((change) => ({
+                  kind: (["add", "replace", "remove"].includes(String(change.kind)) ? String(change.kind) : "add") as "add" | "replace" | "remove",
+                  section: String(change.section || ""),
+                  before: change.before === undefined ? undefined : String(change.before),
+                  after: change.after === undefined ? undefined : String(change.after),
+              }))
+            : [];
+        const memoryUpdate = { revisionId, status: payload.status === "pending_review" ? ("pending" as const) : ("applied" as const), summary: String(payload.summary || ""), changes };
+        setMessages((current) => appendUniqueMessage(current, { id: `memory-${revisionId || event.eventId}`, role: "system", text: text || "长期记忆已更新", memoryUpdate }));
+        return;
+    }
+    if (event.type === "skill_install_suggested") {
+        const skills = Array.isArray(payload.skills)
+            ? (payload.skills as Array<Record<string, unknown>>)
+                  .map((skill) => ({ skillId: String(skill.skillId || ""), name: String(skill.name || ""), summary: skill.summary === undefined ? undefined : String(skill.summary), tag: skill.tag === undefined ? undefined : String(skill.tag) }))
+                  .filter((skill) => skill.skillId && skill.name)
+            : [];
+        if (!skills.length) return;
+        const reason = String(payload.reason || "");
+        setMessages((current) => appendUniqueMessage(current, { id: `skill-suggestion-${event.runId}`, role: "system", text: reason || "Agent 推荐安装技能", skillSuggestion: { reason, skills } }));
+        return;
+    }
+    // 这两个工具成功时已有专门的记忆卡片和安装卡片，不再重复渲染通用工具行；失败仍按工具行展示。
+    if (event.type === "tool_completed" && (payload.toolName === "memory_update" || payload.toolName === "skill_recommend")) return;
     if (event.type === "canvas_undone") {
         setMessages((current) =>
             current.map((item) => {

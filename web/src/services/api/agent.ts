@@ -34,7 +34,7 @@ export type AgentProfileView = {
     layers: AgentProfileLayer[];
 };
 
-export type AgentApprovalPreviewOperation = "add_node" | "update_node" | "connect_nodes" | "arrange_nodes" | "generate_media" | "create_storyboard" | "edit_storyboard" | "create_character" | "plan_step";
+export type AgentApprovalPreviewOperation = "add_node" | "update_node" | "connect_nodes" | "arrange_nodes" | "generate_media" | "create_storyboard" | "edit_storyboard" | "create_character" | "plan_step" | "adopt_drama_media";
 
 export type AgentApprovalPreviewItem = {
     operation: AgentApprovalPreviewOperation;
@@ -138,7 +138,8 @@ export type CreateAgentRunInput = {
     logicalModelId?: string;
     channelId?: string;
     channelModelKey?: string;
-    skillIds?: string[];
+    /** 对话固定或本条消息点名的技能；其余已安装技能由 Agent 按目录自动发现。 */
+    pinnedSkillIds?: string[];
     focusNodeIds?: string[];
     focusNodeOmittedCount?: number;
     permissionMode?: AgentPermissionMode;
@@ -180,6 +181,11 @@ export function sendAgentInterjection(runId: string, input: { text: string; mess
     return http.post<{ accepted: boolean; pending: number }>(`/agent/runs/${encodeURIComponent(runId)}/interjections`, input, { timeout: 20_000 });
 }
 
+/** 撤回尚未送达模型的插话；不会停止本轮，也不会取消已提交的生成任务。 */
+export function withdrawAgentInterjection(runId: string, messageId: string) {
+    return http.delete<{ withdrawn: boolean }>(`/agent/runs/${encodeURIComponent(runId)}/interjections/${encodeURIComponent(messageId)}`, { timeout: 15_000 });
+}
+
 export function getAgentCapabilities() {
     return http.get<{ version: number; permissionModes: AgentPermissionMode[]; contextScopes: string[]; skills: boolean; writeTools: boolean; capabilitySetVersion?: string; capabilitySetHash?: string; nodeTypes?: string[] }>("/agent/capabilities", { timeout: 15_000 });
 }
@@ -204,6 +210,11 @@ export function getAgentRun(runId: string, signal?: AbortSignal, options: { sinc
 export function listAgentConversations(options: { canvasId: string; before?: string; limit?: number; signal?: AbortSignal }) {
     const { signal, ...params } = options;
     return http.get<{ items: AgentConversationSummary[]; nextCursor?: string }>("/agent/conversations", { signal, params });
+}
+
+/** 单个对话的最新轮次摘要，只含控制列；用于判断目录之外的已选对话是否变化。 */
+export function getAgentConversation(conversationId: string, signal?: AbortSignal) {
+    return http.get<AgentConversationSummary>(`/agent/conversations/${encodeURIComponent(conversationId)}`, { signal });
 }
 
 export function listAgentConversationRuns(conversationId: string, options: { after?: string; limit?: number; signal?: AbortSignal } = {}) {

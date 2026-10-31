@@ -7,8 +7,10 @@ import { buildImageGenerationNodeTitle } from "@/lib/canvas/canvas-generation-ti
 import { fitImageNodeSize, imageNodeSizeFromRatio } from "@/lib/canvas/canvas-node-size";
 import { canvasImageReferenceLimitError, buildImageGenerationMetadata, getGenerationCount, isGenerationCanceled, resetGenerationTaskMetadata, runCanvasGenerationTaskToConsumer } from "@/lib/canvas/canvas-project-generation";
 import { imageGenerationReferenceConnections } from "@/lib/canvas/canvas-resource-references";
+import { followsReferenceImageSize } from "@/lib/canvas/canvas-reference-image-size";
 import { canvasGenerationPromptMetadata } from "@/lib/canvas/canvas-generation-submission";
 import { batchOutputResultPending } from "@/lib/canvas/canvas-batch-references";
+import { mediaVersionFieldsBeforeReplace } from "@/lib/canvas/canvas-media-versions";
 import { commitProducedModel } from "@/lib/canvas/produced-model";
 import { CONTENT_MODERATION_ERROR_CODE, generationFailureMetadata, type GenerationFailureMetadata } from "@/lib/generation-error";
 import { CanvasNodeType, type CanvasNodeData } from "@/types/canvas";
@@ -60,7 +62,7 @@ export async function executeImageGeneration(
     const isConfigNode = sourceNode?.type === CanvasNodeType.Config;
     const isImageNode = sourceNode?.type === CanvasNodeType.Image;
     const isExistingImageNode = isImageNode && hasImageBatchResult(sourceNode);
-    const reuseSourceNode = canGenerateImageInPlace(sourceNode);
+    const reuseSourceNode = canGenerateImageInPlace(sourceNode, count);
     const keepBatchResult = reuseSourceNode && batchOutputResultPending(sourceNode?.metadata);
     const retired = reuseSourceNode && sourceNode ? retireImageBatchChildren(sourceNode, canvasNodes, canvasConnections) : { nodes: canvasNodes, connections: canvasConnections, removedIds: [] as string[] };
     const workingNodes = retired.nodes;
@@ -69,6 +71,8 @@ export async function executeImageGeneration(
     const referenceImages = generationContext.referenceImages;
     const generationType = referenceImages.length ? ("edit" as const) : ("generation" as const);
     const generationMetadata = buildImageGenerationMetadata(generationType, generationConfig, count, referenceImages);
+    // 生成会把实际尺寸写回节点；来源尺寸不是用户所选时保留跟随标记，换参考图后重新生成仍取新参考图比例。
+    const sizeSourceMetadata = followsReferenceImageSize(sourceNode) ? { imageSizeSource: "reference" as const } : {};
     const parentConfig = NODE_DEFAULT_SIZE[isConfigNode ? CanvasNodeType.Config : isImageNode ? CanvasNodeType.Image : CanvasNodeType.Text];
     const imageDefaults = NODE_DEFAULT_SIZE[CanvasNodeType.Image];
     // 生成中占位框按设置比例显示，避免 16:9 任务显示成默认 340x240。
@@ -110,6 +114,8 @@ export async function executeImageGeneration(
         height: rootHeight,
         metadata: {
             ...resetGenerationTaskMetadata(reuseSourceNode ? sourceNode?.metadata : undefined, NODE_STATUS_LOADING),
+            // 原位生成会清空旧图，先把它登记进版本历史，失败时也能从版本面板恢复。
+            ...(reuseSourceNode && count <= 1 ? mediaVersionFieldsBeforeReplace(sourceNode) : {}),
             imageLayerGroup: undefined,
             layerDecomposition: undefined,
             imageLayerWorkflow: undefined,
@@ -118,6 +124,7 @@ export async function executeImageGeneration(
             ...canvasGenerationPromptMetadata(prompt, effectivePrompt),
             status: NODE_STATUS_LOADING,
             size: generationConfig.size,
+            ...sizeSourceMetadata,
             isBatchRoot: count > 1,
             batchChildIds: count > 1 ? childIds : undefined,
             batchFailedCount: count > 1 ? 0 : undefined,
@@ -146,6 +153,7 @@ export async function executeImageGeneration(
             ...canvasGenerationPromptMetadata(prompt, effectivePrompt),
             status: NODE_STATUS_LOADING,
             size: generationConfig.size,
+            ...sizeSourceMetadata,
             batchRootId: rootId,
             ...generationMetadata,
             ...styleMetadata,

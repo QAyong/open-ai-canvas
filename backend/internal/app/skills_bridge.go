@@ -10,6 +10,7 @@ import (
 )
 
 const SkillPackageUploadMaxBytes = skills.SkillPackageUploadMaxBytes
+const SkillPackageEditMaxBytes = skills.SkillPackageEditMaxBytes
 
 var ErrNotBuiltinSkill = skills.ErrNotBuiltinSkill
 
@@ -33,8 +34,31 @@ type (
 	SkillPackageBundleFile                = skills.SkillPackageBundleFile
 	SkillPackageBundle                    = skills.SkillPackageBundle
 	SkillFileSearchResult                 = skills.SkillFileSearchResult
+	SkillPackageFileOperation             = skills.SkillPackageFileOperation
+	SkillPackageEditRequest               = skills.SkillPackageEditRequest
+	SkillPackageEditResult                = skills.SkillPackageEditResult
 	SkillPreset                           = skills.SkillPreset
+	SkillRecommendationList               = skills.SkillRecommendationList
+	SkillRecommendationIndustry           = skills.SkillRecommendationIndustry
+	SkillRecommendationItem               = skills.SkillRecommendationItem
+	SkillRecommendationInstallRequest     = skills.SkillRecommendationInstallRequest
+	SkillRecommendationInstallResult      = skills.SkillRecommendationInstallResult
 )
+
+// SkillRecommendations 返回按行业分组的推荐技能及当前用户的安装状态。
+func (s *Service) SkillRecommendations(userID string) (*SkillRecommendationList, error) {
+	return s.skillDomain().SkillRecommendations(userID)
+}
+
+// InstallSkillRecommendations 安装某个行业的推荐技能（未指定则全部）。
+func (s *Service) InstallSkillRecommendations(userID, industryID string, req SkillRecommendationInstallRequest) (*SkillRecommendationInstallResult, error) {
+	return s.skillDomain().InstallSkillRecommendations(userID, industryID, req)
+}
+
+// SetSkillAgentMode 设置已安装技能是否允许 Agent 自动发现（auto / manual）。
+func (s *Service) SetSkillAgentMode(userID, id, mode string) (*SkillItem, error) {
+	return s.skillDomain().SetSkillAgentMode(userID, id, mode)
+}
 
 func (s *Service) skillDomain() *skills.Service {
 	if s == nil {
@@ -111,11 +135,11 @@ func (s *Service) EnsureBuiltinSkills() error {
 	if err := s.skillDomain().EnsureBuiltinSkills(); err != nil {
 		return err
 	}
-	// 在同步文件包之后校验预设，确保预设只引用当前启用的稳定技能 ID。
+	// 在同步文件包之后校验预设与行业推荐，确保它们只引用当前启用的稳定技能 ID。
 	if _, err := s.SkillPresets(); err != nil {
 		return err
 	}
-	return nil
+	return skills.ValidateSkillRecommendations()
 }
 
 func (s *Service) EnsureSkillPackages() error {
@@ -150,6 +174,10 @@ func (s *Service) SkillPackageBundle(userID string, skillID string) (*SkillPacka
 	return s.skillDomain().SkillPackageBundle(userID, skillID)
 }
 
+// EditSkillPackageFiles 由作者批量修改技能包文本文件并生成新版本（乐观锁基于 baseVersionId）。
+func (s *Service) EditSkillPackageFiles(userID string, skillID string, req SkillPackageEditRequest) (*SkillPackageEditResult, error) {
+	return s.skillDomain().EditSkillPackageFiles(userID, skillID, req)
+}
 func (s *Service) SearchSkillPackage(userID string, skillID string, query string) ([]SkillFileSearchResult, error) {
 	return s.skillDomain().SearchSkillPackage(userID, skillID, query)
 }

@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
-import { App, Button, Drawer, Input, Modal, Popconfirm, Select, Space, Table, Tag, Image as AntImage, Segmented } from "antd";
+import { App, Button, Input, Popconfirm, Select, Space, Table, Tag, Image as AntImage, Segmented } from "antd";
+import { AdminDrawer, AdminModal } from "@/pages/admin/ui/overlays";
 import type { ColumnsType } from "antd/es/table";
-import { AlertCircle, Archive, ArchiveRestore, Bug, CheckCircle2, Clock, FileText, Inbox, Lightbulb, MessageSquare, Paperclip, Play, RefreshCw, Search, Send, Sparkles, UserRound } from "lucide-react";
+import { AlertCircle, Archive, ArchiveRestore, Bug, CheckCircle2, Clock, FileText, Inbox, Lightbulb, MessageSquare, Paperclip, Play, RefreshCw, Search, Send, UserRound, Clock3 } from "lucide-react";
 
 import { getAdminFeedbacks, updateAdminFeedback, archiveAdminFeedback, type FeedbackItem, type FeedbackType, type FeedbackStatus, type FeedbackAttachment } from "@/services/api/feedback";
 import { AdminPageFrame } from "../components/admin-shell";
@@ -104,7 +105,7 @@ export default function AdminFeedbacksPage() {
     const typeConfig: Record<FeedbackType, { label: string; color: string; icon: typeof Bug }> = {
         bug: { label: "Bug 缺陷", color: "error", icon: Bug },
         feature: { label: "功能提议", color: "processing", icon: Lightbulb },
-        improvement: { label: "体验建议", color: "cyan", icon: Sparkles },
+        improvement: { label: "体验建议", color: "cyan", icon: Lightbulb },
         other: { label: "其他反馈", color: "default", icon: MessageSquare },
     };
 
@@ -151,15 +152,15 @@ export default function AdminFeedbacksPage() {
                             <span className="font-semibold text-foreground hover:text-primary cursor-pointer" onClick={() => handleOpenDetail(record)}>
                                 {record.title}
                             </span>
-                            {record.archived ? <Tag className="text-[10px] px-1.5 m-0 bg-muted/60 text-muted-foreground border-border/60">已归档</Tag> : null}
+                            {record.archived ? <Tag className="text-[var(--fs-label)] px-2 m-0 bg-muted/60 text-muted-foreground border-border/60">已归档</Tag> : null}
                             {attCount > 0 ? (
-                                <Tag className="text-[10px] px-1 m-0 flex items-center gap-0.5 border-dashed">
+                                <Tag className="text-[var(--fs-label)] px-1 m-0 flex items-center gap-0.5 border-dashed">
                                     <Paperclip className="size-2.5" />
                                     <span>{attCount} 附件</span>
                                 </Tag>
                             ) : null}
                             {record.adminReply ? (
-                                <Tag color="blue" className="text-[10px] px-1 m-0 flex items-center gap-0.5">
+                                <Tag color="blue" className="text-[var(--fs-label)] px-1 m-0 flex items-center gap-0.5">
                                     <CheckCircle2 className="size-2.5" />
                                     <span>已答复</span>
                                 </Tag>
@@ -178,7 +179,7 @@ export default function AdminFeedbacksPage() {
                 <div className="text-xs space-y-0.5">
                     <div className="font-medium text-foreground">{record.userName || "匿名"}</div>
                     {record.contact ? (
-                        <div className="text-[11px] text-muted-foreground truncate max-w-[140px]" title={record.contact}>
+                        <div className="text-[var(--fs-label)] text-muted-foreground truncate max-w-[140px]" title={record.contact}>
                             {record.contact}
                         </div>
                     ) : null}
@@ -257,38 +258,38 @@ export default function AdminFeedbacksPage() {
             <div className="space-y-4">
                 {/* Metrics Cards */}
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="rounded-xl border border-border/70 bg-card p-3.5 flex items-center justify-between">
+                    <div className="rounded-xl border border-border/70 bg-card p-4 flex items-center justify-between">
                         <div>
                             <p className="text-xs text-muted-foreground">当前列表数</p>
-                            <p className="text-xl font-bold text-foreground mt-0.5">{total}</p>
+                            <p className="text-xl font-semibold text-foreground mt-0.5">{total}</p>
                         </div>
                         <Inbox className="size-5 text-primary opacity-60" />
                     </div>
-                    <div className="rounded-xl border border-orange-500/30 bg-orange-500/5 p-3.5 flex items-center justify-between">
+                    <div className="rounded-xl border border-orange-500/30 bg-orange-500/5 p-4 flex items-center justify-between">
                         <div>
                             <p className="text-xs text-orange-600 dark:text-orange-400">待处理</p>
-                            <p className="text-xl font-bold text-orange-600 dark:text-orange-400 mt-0.5">{pendingCount}</p>
+                            <p className="text-xl font-semibold text-orange-600 dark:text-orange-400 mt-0.5">{pendingCount}</p>
                         </div>
                         <Clock className="size-5 text-orange-500 opacity-60" />
                     </div>
-                    <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-3.5 flex items-center justify-between">
+                    <div className="rounded-xl border border-blue-500/30 bg-blue-500/5 p-4 flex items-center justify-between">
                         <div>
                             <p className="text-xs text-blue-600 dark:text-blue-400">处理中</p>
-                            <p className="text-xl font-bold text-blue-600 dark:text-blue-400 mt-0.5">{processingCount}</p>
+                            <p className="text-xl font-semibold text-blue-600 dark:text-blue-400 mt-0.5">{processingCount}</p>
                         </div>
-                        <Sparkles className="size-5 text-blue-500 opacity-60" />
+                        <Clock3 className="size-5 text-blue-500 opacity-60" />
                     </div>
-                    <div className="rounded-xl border border-green-500/30 bg-green-500/5 p-3.5 flex items-center justify-between">
+                    <div className="rounded-xl border border-green-500/30 bg-green-500/5 p-4 flex items-center justify-between">
                         <div>
                             <p className="text-xs text-green-600 dark:text-green-400">已解决 / 采纳</p>
-                            <p className="text-xl font-bold text-green-600 dark:text-green-400 mt-0.5">{resolvedCount}</p>
+                            <p className="text-xl font-semibold text-green-600 dark:text-green-400 mt-0.5">{resolvedCount}</p>
                         </div>
                         <CheckCircle2 className="size-5 text-green-500 opacity-60" />
                     </div>
                 </div>
 
                 {/* Filter and Search Bar */}
-                <div className="flex flex-wrap items-center justify-between gap-2.5 rounded-xl border border-border/70 bg-card p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-card p-3">
                     <div className="flex flex-wrap items-center gap-2">
                         <Segmented
                             value={archivedTab}
@@ -386,7 +387,7 @@ export default function AdminFeedbacksPage() {
             </div>
 
             {/* Detail & Reply Drawer */}
-            <Drawer
+            <AdminDrawer
                 open={drawerOpen}
                 onClose={() => setDrawerOpen(false)}
                 width={560}
@@ -400,17 +401,17 @@ export default function AdminFeedbacksPage() {
                 {selectedItem ? (
                     <div className="space-y-4 text-xs">
                         {/* Meta */}
-                        <div className="rounded-xl border border-border/70 bg-muted/20 p-3.5 space-y-2">
+                        <div className="rounded-xl border border-border/70 bg-muted/20 p-4 space-y-2">
                             <div className="flex items-center justify-between">
                                 <span className="font-semibold text-sm text-foreground">{selectedItem.title}</span>
-                                <div className="flex items-center gap-1.5">
+                                <div className="flex items-center gap-2">
                                     {selectedItem.archived ? <Tag className="m-0 text-xs bg-muted/80 text-muted-foreground border-border/80">已归档</Tag> : null}
                                     <Tag color={statusConfig[selectedItem.status]?.tagColor || "default"} className="m-0 text-xs">
                                         {statusConfig[selectedItem.status]?.label || selectedItem.status}
                                     </Tag>
                                 </div>
                             </div>
-                            <div className="grid grid-cols-2 gap-2 text-muted-foreground pt-1 border-t border-border/40 text-[11px]">
+                            <div className="grid grid-cols-2 gap-2 text-muted-foreground pt-1 border-t border-border/40 text-[var(--fs-label)]">
                                 <div>
                                     提交用户：<span className="text-foreground">{selectedItem.userName}</span>
                                 </div>
@@ -428,14 +429,14 @@ export default function AdminFeedbacksPage() {
 
                         {/* Content */}
                         <div>
-                            <label className="block text-xs font-semibold text-foreground mb-1.5">反馈内容说明</label>
+                            <label className="block text-xs font-semibold text-foreground mb-2">反馈内容说明</label>
                             <div className="rounded-xl border border-border/70 bg-muted/10 p-3 text-xs leading-relaxed whitespace-pre-wrap text-foreground/90">{selectedItem.content}</div>
                         </div>
 
                         {/* Attachments */}
                         {selectedAttachments.length > 0 ? (
                             <div>
-                                <label className="block text-xs font-semibold text-foreground mb-1.5">附件清单 ({selectedAttachments.length})</label>
+                                <label className="block text-xs font-semibold text-foreground mb-2">附件清单 ({selectedAttachments.length})</label>
                                 <div className="grid grid-cols-2 gap-2">
                                     {selectedAttachments.map((att) => (
                                         <div key={att.id} className="flex items-center gap-2 rounded-lg border border-border/60 bg-muted/25 p-2">
@@ -450,7 +451,7 @@ export default function AdminFeedbacksPage() {
                                                 <p className="truncate text-xs font-medium" title={att.name}>
                                                     {att.name}
                                                 </p>
-                                                <p className="text-[10px] text-muted-foreground">{(att.size / (1024 * 1024)).toFixed(1)} MB</p>
+                                                <p className="text-[var(--fs-label)] text-muted-foreground">{(att.size / (1024 * 1024)).toFixed(1)} MB</p>
                                             </div>
                                         </div>
                                     ))}
@@ -460,9 +461,9 @@ export default function AdminFeedbacksPage() {
 
                         {/* Environment Info */}
                         {Object.keys(selectedEnv).length > 0 ? (
-                            <details className="rounded-lg border border-border/50 bg-muted/10 p-2.5 text-[11px] text-muted-foreground">
+                            <details className="rounded-lg border border-border/50 bg-muted/10 p-2 text-[var(--fs-label)] text-muted-foreground">
                                 <summary className="cursor-pointer font-medium hover:text-foreground">客户端诊断环境快照</summary>
-                                <div className="mt-2 space-y-1 font-mono text-[10px] bg-black/20 p-2 rounded">
+                                <div className="mt-2 space-y-1 font-mono text-[var(--fs-label)] bg-black/20 p-2 rounded">
                                     {Object.entries(selectedEnv).map(([k, v]) => (
                                         <div key={k} className="flex gap-2">
                                             <span className="text-muted-foreground">{k}:</span>
@@ -511,15 +512,15 @@ export default function AdminFeedbacksPage() {
                         </div>
                     </div>
                 ) : null}
-            </Drawer>
+            </AdminDrawer>
 
             {/* Video Preview Modal */}
             {previewVideoUrl ? (
-                <Modal open={Boolean(previewVideoUrl)} onCancel={() => setPreviewVideoUrl(null)} footer={null} width={720} destroyOnClose title="附件视频预览">
+                <AdminModal open={Boolean(previewVideoUrl)} onCancel={() => setPreviewVideoUrl(null)} footer={null} width={720} title="附件视频预览">
                     <div className="py-2">
                         <video src={previewVideoUrl} controls autoPlay className="w-full max-h-[60vh] rounded-lg bg-black" />
                     </div>
-                </Modal>
+                </AdminModal>
             ) : null}
         </AdminPageFrame>
     );

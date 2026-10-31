@@ -1,5 +1,5 @@
 import { Button } from "antd";
-import { Copy, ExternalLink, Heart, Pencil, Trash2, Wand2 } from "lucide-react";
+import { Copy, ExternalLink, Heart, Pencil, Trash2, ArrowUpRight } from "lucide-react";
 import { useState } from "react";
 
 import { Tooltip } from "@/components/ui/base/tooltip";
@@ -70,7 +70,7 @@ export function InspirationDetailModal({
                                 <h2 className="text-[var(--fs-heading,16px)] font-semibold leading-6 text-foreground">{item.title}</h2>
                                 {item.description ? <p className="mt-1 text-xs leading-5 text-foreground/58">{item.description}</p> : null}
                             </div>
-                            <div className="flex shrink-0 items-center gap-1.5">
+                            <div className="flex shrink-0 items-center gap-2">
                                 <Tooltip title={favorite ? "取消收藏" : "收藏"}>
                                     <button type="button" data-icon-only className="inspiration-icon-button" aria-label={favorite ? "取消收藏灵感" : "收藏灵感"} aria-pressed={favorite} onClick={() => onToggleFavorite(item)}>
                                         <span aria-hidden="true">
@@ -95,7 +95,7 @@ export function InspirationDetailModal({
                             </div>
                         </div>
 
-                        <div className="flex flex-col gap-1.5">
+                        <div className="flex flex-col gap-2">
                             {showSources ? (
                                 <MetaRow label="来源">
                                     {source?.name ?? (item.sourceId && item.sourceId !== "original" ? (source?.label ?? "未标注来源") : "原创")}
@@ -109,7 +109,7 @@ export function InspirationDetailModal({
                             </MetaRow>
                             {item.tags?.length ? (
                                 <MetaRow label="标签">
-                                    <span className="flex flex-wrap gap-1.5">
+                                    <span className="flex flex-wrap gap-2">
                                         {item.tags.map((tag) => (
                                             <span key={tag} className="inspiration-chip">
                                                 {tag}
@@ -135,7 +135,7 @@ export function InspirationDetailModal({
                         <Button onClick={onClose}>关闭</Button>
                         <Button
                             type="primary"
-                            icon={<Wand2 className="size-4" />}
+                            icon={<ArrowUpRight className="size-4" />}
                             onClick={() => {
                                 setUsingPrompt(true);
                                 onClose();

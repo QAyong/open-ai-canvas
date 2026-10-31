@@ -56,9 +56,18 @@ func (providerCircuitOpenError) Error() string {
 type providerStatePendingError struct {
 	TaskID string
 	Cause  error
+	// Stage 是上游可读的排队/生成阶段，worker 退回调度时写入任务进度。
+	Stage string
+	// Detached 表示协议声明了分离式回查：上游仍在排队或生成，而不是状态未同步。
+	Detached bool
+	// PollDelay 是分离式回查的下次回查间隔；0 表示使用默认间隔。
+	PollDelay time.Duration
 }
 
 func (e providerStatePendingError) Error() string {
+	if e.Detached {
+		return fmt.Sprintf("上游任务仍在排队或生成，将继续查询原任务（任务 %s）", e.TaskID)
+	}
 	return fmt.Sprintf("上游任务状态尚未同步，将继续查询原任务（任务 %s）", e.TaskID)
 }
 
@@ -158,6 +167,8 @@ func (e providerHTTPError) summary() string {
 		return "模型服务拒绝了请求，请检查模型和参数"
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return "模型服务鉴权失败，请检查 API Key 和模型权限"
+	case http.StatusPaymentRequired:
+		return "模型服务余额不足（HTTP 402），请到渠道供应商充值或更换渠道后重试"
 	case http.StatusNotFound:
 		return "模型或模型接口不存在，请检查渠道配置"
 	case http.StatusRequestTimeout, http.StatusGatewayTimeout:

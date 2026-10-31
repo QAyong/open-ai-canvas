@@ -59,6 +59,33 @@ export type CanvasNodeContentProps = {
     onMediaPlayRequest?: (nodeId: string) => void;
 };
 
+/** 由页面 renderNodeContent 渲染的节点；CanvasNode 的 memo 只对这些节点比较该回调。 */
+export function canvasNodeUsesCustomContent(node: CanvasNodeData, isEditingContent = false) {
+    return (
+        node.type === CanvasNodeType.Config ||
+        node.type === CanvasNodeType.Script ||
+        node.type === CanvasNodeType.BatchTable ||
+        Boolean(node.metadata?.previsSceneId) ||
+        (node.metadata?.workflowKind === "character" && Boolean(node.metadata.characterAssetId)) ||
+        (node.metadata?.workflowKind === "story_input" && !isEditingContent) ||
+        (node.metadata?.workflowKind === "styleboard" && !node.metadata.content)
+    );
+}
+
+/**
+ * 内容区是否自己展示“生成中 / 失败”状态（与下方 CanvasNodeContent 的分支保持一致）。
+ * 自己展示时节点外层不再叠加同义的状态徽章，避免同一状态出现两遍。
+ */
+export function canvasNodeRendersStatusContent(node: CanvasNodeData, options: { isBatchRoot: boolean; isEditingContent: boolean; hasCustomRenderer: boolean }) {
+    const status = node.metadata?.status;
+    if (status !== "loading" && status !== "error") return false;
+    if (node.metadata?.fileUpload) return false;
+    if (options.hasCustomRenderer && canvasNodeUsesCustomContent(node, options.isEditingContent)) return false;
+    if (node.type === ART_CRITIQUE_NODE_TYPE || node.type === MEDIA_CONVERSION_NODE_TYPE) return false;
+    if (options.isBatchRoot) return !node.metadata?.content && !node.metadata?.storageKey;
+    return true;
+}
+
 export function CanvasNodeContent(props: CanvasNodeContentProps) {
     if (props.node.metadata?.fileUpload) return <CanvasFileUploadContent node={props.node} theme={props.theme} reduceMotion={props.disableMediaEffects} />;
     // Preserve the decoded image across LOD changes; only its surrounding
@@ -68,20 +95,13 @@ export function CanvasNodeContent(props: CanvasNodeContentProps) {
     }
     if (props.renderLOD === "shell") return <CanvasNodeShellContent node={props.node} theme={props.theme} />;
     if (props.renderLOD === "preview") return <CanvasNodePreviewContent node={props.node} theme={props.theme} />;
-    const hasCustomContent =
-        props.node.type === CanvasNodeType.Config ||
-        props.node.type === CanvasNodeType.Script ||
-        props.node.type === CanvasNodeType.BatchTable ||
-        Boolean(props.node.metadata?.previsSceneId) ||
-        (props.node.metadata?.workflowKind === "character" && Boolean(props.node.metadata.characterAssetId)) ||
-        (props.node.metadata?.workflowKind === "story_input" && !props.isEditingContent) ||
-        (props.node.metadata?.workflowKind === "styleboard" && !props.node.metadata.content);
+    const hasCustomContent = canvasNodeUsesCustomContent(props.node, props.isEditingContent);
     if (hasCustomContent && props.renderNodeContent) return props.renderNodeContent(props.node);
     if (props.node.type === ART_CRITIQUE_NODE_TYPE) return <ArtCritiqueNodeContent node={props.node} />;
     if (props.node.type === MEDIA_CONVERSION_NODE_TYPE) return <MediaConversionNodeContent node={props.node} theme={props.theme} />;
     if (props.isBatchRoot) return <ImageNodeContent {...props} />;
     if (props.node.metadata?.status === "loading") return <LoadingContent node={props.node} theme={props.theme} onOpenTaskDetails={props.onOpenTaskDetails} />;
-    if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onReloadResource={props.onReloadResource} />;
+    if (props.node.metadata?.status === "error") return <ErrorContent node={props.node} theme={props.theme} onRetry={props.onRetry} onReloadResource={props.onReloadResource} onOpenTaskDetails={props.onOpenTaskDetails} />;
 
     const pluginDefinition = getNodeDefinition(props.node.type)?.plugin;
     if (pluginDefinition) return <PluginCanvasNodeContent {...props} renderer={pluginDefinition.renderer} schema={pluginDefinition.schema} />;
@@ -249,7 +269,7 @@ function TextContent({ node, theme, isEditingContent, contentReadOnly, textareaR
                 />
             ) : richTextHTML ? (
                 <div
-                    className="thin-scrollbar block h-full w-full select-text overflow-y-auto break-words bg-transparent px-4 pb-4 font-mono [&_a]:underline [&_blockquote]:my-2 [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:opacity-70 [&_code]:rounded [&_code]:bg-black/6 [&_code]:px-1 dark:[&_code]:bg-white/8 [&_h1]:my-2 [&_h1]:text-[1.55em] [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-[1.3em] [&_h2]:font-semibold [&_h3]:my-1.5 [&_h3]:text-[1.12em] [&_h3]:font-semibold [&_hr]:my-3 [&_li]:my-0.5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-black/90 [&_pre]:p-2 [&_pre]:text-white [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
+                    className="thin-scrollbar block h-full w-full select-text overflow-y-auto break-words bg-transparent px-4 pb-4 font-mono [&_a]:underline [&_blockquote]:my-2 [&_blockquote]:rounded-md [&_blockquote]:bg-foreground/5 [&_blockquote]:px-3 [&_blockquote]:py-2 [&_blockquote]:opacity-70 [&_code]:rounded [&_code]:bg-black/6 [&_code]:px-1 dark:[&_code]:bg-white/8 [&_h1]:my-2 [&_h1]:text-[1.55em] [&_h1]:font-semibold [&_h2]:my-2 [&_h2]:text-[1.3em] [&_h2]:font-semibold [&_h3]:my-2 [&_h3]:text-[1.12em] [&_h3]:font-semibold [&_hr]:my-3 [&_li]:my-0.5 [&_ol]:my-2 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-1 [&_pre]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded-md [&_pre]:bg-black/90 [&_pre]:p-2 [&_pre]:text-white [&_ul]:my-2 [&_ul]:list-disc [&_ul]:pl-5"
                     style={textStyle}
                     onWheel={(event) => event.stopPropagation()}
                     dangerouslySetInnerHTML={{ __html: richTextHTML }}
@@ -280,7 +300,7 @@ function SkillContent({ node, theme }: CanvasNodeContentProps) {
                             <div className="truncate text-sm font-semibold" title={skill?.name || node.title || "技能"}>
                                 {skill?.name || node.title || "技能"}
                             </div>
-                            <div className="mt-0.5 flex items-center gap-1.5 text-[var(--fs-label)]" style={{ color: theme.node.muted }}>
+                            <div className="mt-0.5 flex items-center gap-2 text-[var(--fs-label)]" style={{ color: theme.node.muted }}>
                                 <span>{skillCategoryLabel(skill?.category)}</span>
                                 <span>·</span>
                                 <span>{skillOutputModeLabel(skill?.outputMode)}</span>
@@ -304,10 +324,10 @@ function SkillContent({ node, theme }: CanvasNodeContentProps) {
                 <div className="mb-1 font-semibold opacity-55">模板</div>
                 <div className="line-clamp-4 whitespace-pre-wrap break-words">{template || "未配置技能模板"}</div>
             </div>
-            <div className="mt-3 flex flex-wrap gap-1.5">
+            <div className="mt-3 flex flex-wrap gap-2">
                 {tags.length ? (
                     tags.map((tag) => (
-                        <span key={tag} className="rounded-[var(--r-sm)] bg-black/5 px-1.5 py-0.5 text-[var(--fs-tiny)] dark:bg-white/6" style={{ color: theme.node.muted }}>
+                        <span key={tag} className="rounded-[var(--r-sm)] bg-black/5 px-2 py-0.5 text-[var(--fs-tiny)] dark:bg-white/6" style={{ color: theme.node.muted }}>
                             {tag}
                         </span>
                     ))

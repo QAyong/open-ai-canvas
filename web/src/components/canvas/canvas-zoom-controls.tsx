@@ -20,11 +20,13 @@ type CanvasZoomControlsProps = {
     onToggleMiniMap: () => void;
     onOpenShortcuts: () => void;
     containerRef?: RefObject<HTMLDivElement | null>;
+    /** 紧凑且去掉底板：工具条与画布融为一体，靠图标对比度和悬停反馈区分。 */
+    bare?: boolean;
 };
 
 const QUICK_ZOOM_LEVELS = [0.25, 0.5, 1, 2] as const;
 
-export function CanvasZoomControls({ scale, onScaleChange, onFitContent, onAutoArrange, hideNodeConnections = false, onHideNodeConnectionsChange, isMiniMapOpen, onToggleMiniMap, onOpenShortcuts, containerRef }: CanvasZoomControlsProps) {
+export function CanvasZoomControls({ scale, onScaleChange, onFitContent, onAutoArrange, hideNodeConnections = false, onHideNodeConnectionsChange, isMiniMapOpen, onToggleMiniMap, onOpenShortcuts, containerRef, bare = false }: CanvasZoomControlsProps) {
     const theme = canvasThemes[useActiveTheme()];
     const rootRef = useRef<HTMLDivElement>(null);
     const liveScaleRef = useRef(scale);
@@ -124,7 +126,7 @@ export function CanvasZoomControls({ scale, onScaleChange, onFitContent, onAutoA
                         animate={{ opacity: 1, y: 0, scale: 1 }}
                         exit={{ opacity: 0, y: 9, scale: 0.96 }}
                         transition={aceternityMotion.spring.panel}
-                        className="aceternity-floating-panel absolute bottom-[var(--canvas-dock-popover-offset)] left-0 w-[220px] overflow-hidden rounded-[var(--panel-radius)] border p-2.5 backdrop-blur-2xl"
+                        className="aceternity-floating-panel absolute bottom-[var(--canvas-dock-popover-offset)] left-0 w-[220px] overflow-hidden rounded-[var(--panel-radius)] border p-2 backdrop-blur-2xl"
                         style={{ background: theme.spatial.elevated, borderColor: theme.toolbar.border, color: theme.node.text, boxShadow: `0 28px 80px ${theme.spatial.shadow}` }}
                     >
                         <div className="absolute inset-x-10 top-0 h-px" style={{ background: `linear-gradient(90deg, transparent, ${theme.spatial.glowStrong}, transparent)` }} />
@@ -149,7 +151,7 @@ export function CanvasZoomControls({ scale, onScaleChange, onFitContent, onAutoA
                             onChange={(event) => commitScale(Number(event.target.value) / 100)}
                             aria-label="精确缩放画布"
                         />
-                        <div className="mt-2.5 grid grid-cols-4 gap-1">
+                        <div className="mt-2 grid grid-cols-4 gap-1">
                             {QUICK_ZOOM_LEVELS.map((level) => (
                                 <motion.button
                                     key={level}
@@ -169,7 +171,7 @@ export function CanvasZoomControls({ scale, onScaleChange, onFitContent, onAutoA
                 ) : null}
             </AnimatePresence>
 
-            <FloatingDock items={items} className="canvas-floating-dock" style={canvasDockStyle(theme)} ariaLabel="画布视图控制" />
+            <FloatingDock items={items} size={bare ? "compact" : "default"} className={bare ? "canvas-floating-dock is-bare" : "canvas-floating-dock"} style={bare ? { ...canvasDockStyle(theme, theme.node.text), background: "transparent", borderColor: "transparent", boxShadow: "none" } : canvasDockStyle(theme)} ariaLabel="画布视图控制" />
         </div>
     );
 }

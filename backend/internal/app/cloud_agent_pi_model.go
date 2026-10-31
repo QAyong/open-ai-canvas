@@ -109,7 +109,11 @@ func (s *Service) cloudAgentPiModel(ctx context.Context, userID, runID string, p
 	var correction []map[string]any
 	for attempt := 0; attempt <= cloudAgentModelStepRetries; attempt++ {
 		if attempt > 0 {
-			delay := time.Duration(1<<(attempt-1)) * time.Second
+			base := s.cloudAgentModelRetryBase
+			if base <= 0 {
+				base = time.Second
+			}
+			delay := time.Duration(1<<(attempt-1)) * base
 			log.Printf("[Agent] model step retry run=%s attempt=%d/%d after %s: %v", runID, attempt, cloudAgentModelStepRetries, delay, lastErr)
 			select {
 			case <-ctx.Done():
@@ -271,7 +275,7 @@ func (s *Service) runCloudAgentModelStep(ctx context.Context, userID, runID stri
 			cloudAgentApplyReadLoopNudge(&canonical, &state)
 		}
 		if !compactionSummary {
-			s.attachCloudAgentLessons(&canonical, userID, cloudAgentLessonTaskText(&state))
+			cloudAgentAttachRunContext(&canonical, &state)
 			budget := s.cloudAgentContextBudgetForRequest(state.Request)
 			if err := fitCloudAgentModelContext(&canonical, budget.InputBudgetTokens); err != nil {
 				return nil, false, err
@@ -438,26 +442,21 @@ func (s *Service) adoptCloudAgentPiModelStep(userID, runID, taskID string) (adop
 }
 
 func cloudAgentPiCanonicalForModelRequest(messages []map[string]any, existing canonicalAgentRequest) (canonicalAgentRequest, error) {
-	compactionSummaryRequest := cloudAgentPiCompactionSummaryRequest(messages)
-	if !compactionSummaryRequest {
-		// 审批暂停会留下没有结果的并行工具调用，先补齐再转换（见 cloud_agent_pi_unanswered_calls.go）。
-		messages = repairRuntimeUnansweredCalls(messages)
+	if cloudAgentPiCompactionSummaryRequest(messages) {
+		return canonicalFromRuntimeMessages(messages, nil, "")
 	}
-	tools, systemPrompt := existing.Tools, existing.SystemPrompt
-	if compactionSummaryRequest {
-		tools, systemPrompt = nil, ""
+	// 工具调用与结果的配对问题在这里修平（见 cloud_agent_pi_unanswered_calls.go）。
+	// 运行时历史仍不可用时退回服务端历史，不能让整轮失败：失败的会话会被下一轮继承。
+	messages = repairRuntimeUnansweredCalls(messages, existing.Messages)
+	canonical, runtimeErr := canonicalFromRuntimeMessages(messages, existing.Tools, existing.SystemPrompt)
+	if runtimeErr == nil {
+		runtimeErr = validateRuntimeMessagesForModel(messages)
 	}
-	canonical, conversionErr := canonicalFromRuntimeMessages(messages, tools, systemPrompt)
-	if conversionErr != nil {
-		return canonicalAgentRequest{}, conversionErr
-	}
-	if compactionSummaryRequest {
-		return canonical, nil
-	}
-	if err := validateRuntimeMessagesForModel(messages); err != nil {
+	if runtimeErr != nil {
 		if len(existing.Messages) == 0 {
-			return canonicalAgentRequest{}, err
+			return canonicalAgentRequest{}, runtimeErr
 		}
+		log.Printf("[Agent] runtime transcript unusable, using server history: %v", runtimeErr)
 		existing.Messages = repairCanonicalUnansweredCalls(existing.Messages)
 		return existing, nil
 	}

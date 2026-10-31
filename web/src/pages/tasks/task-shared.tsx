@@ -1,10 +1,11 @@
 import { Coins } from "lucide-react";
 
-import { formatCredits } from "@/constant/credits";
 import { CONTENT_MODERATION_ERROR_CODE, generationErrorMessage, isContentModerationError } from "@/lib/generation-error";
+import { taskBillingDisplay, taskBillingLabel } from "@/lib/generation-task-billing";
 import { mediaDeliverySummary } from "@/lib/generation-task-display";
 import type { GenerationTask, TaskStatus } from "@/services/api/task-center";
 import { modelDisplayName, type AiConfig } from "@/stores/use-config-store";
+import { RelativeTime } from "@/components/ui/product/relative-time";
 
 export function getTaskCanvasContext(task: GenerationTask, canvasById: Map<string, { title: string; projectId?: string }>, projectNameById: Map<string, string>) {
     if (!task.projectId) return { canvasName: "未绑定画布", projectName: "" };
@@ -53,27 +54,19 @@ export function taskMediaKind(task: GenerationTask): "text" | "image" | "video" 
 }
 
 export function TaskDate({ value }: { value?: string }) {
-    if (!value) return <span className="text-xs text-foreground/38">-</span>;
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return <span className="text-xs text-foreground/38">-</span>;
-    const compact = `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${date.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" })}`;
-    return (
-        <time className="task-record-date-value" dateTime={date.toISOString()} title={date.toLocaleString()}>
-            {compact}
-        </time>
-    );
+    if (!value || !Number.isFinite(Date.parse(value))) return <span className="text-xs text-foreground/38">-</span>;
+    return <RelativeTime className="task-record-date-value" value={value} />;
 }
 
 export function TaskBilling({ billing }: { billing?: GenerationTask["billing"] }) {
     if (!billing) return <span className="task-record-billing-empty text-xs text-foreground/30">-</span>;
-    const amount = formatCredits(billing.amountMicrocredits);
-    const note = billing.status === "settled" ? "已结算" : billing.status === "refunded" ? "已退回" : billing.status === "uncertain" ? "待核对" : "预计";
+    const display = taskBillingDisplay(billing);
     return (
-        <div className={`task-record-billing ${billing.status === "uncertain" ? "is-uncertain" : ""}`} title={`积分${note}`}>
+        <div className={`task-record-billing ${display.tone === "uncertain" ? "is-uncertain" : ""}`} title={taskBillingLabel(billing)}>
             <Coins className="size-4" />
             <span>
-                <strong>{amount}</strong>
-                <small>{note}</small>
+                <strong>{display.amount}</strong>
+                <small>{display.refundNote ? `${display.note} · ${display.refundNote}` : display.note}</small>
             </span>
         </div>
     );
