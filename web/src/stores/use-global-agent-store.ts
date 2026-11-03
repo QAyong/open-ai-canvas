@@ -38,15 +38,30 @@ export type AgentCanvasContext = {
     discardAgentNodes?: (nodeIds: string[]) => void;
 };
 
+/**
+ * 画布之外的页面提供给平台级 Agent 的上下文，目前只有合规核验页：
+ * 面板据此允许停靠，并接收页面发来的预填消息。它不绑定画布，运行仍是未绑定画布的对话。
+ */
+export type AgentPageContext = {
+    kind: "compliance";
+    /** 空态（还没有核验）为 null。 */
+    checkId: string | null;
+    prefillRequest?: AgentPrefillRequest | null;
+    /** 页面自己的入口就是主输入框时，不再显示悬浮球。 */
+    launcherHidden?: boolean;
+};
+
 type GlobalAgentStore = {
     /** 平台唯一 Agent 面板的开合状态，跨路由保持。 */
     open: boolean;
     canvas: AgentCanvasContext | null;
+    page: AgentPageContext | null;
     /** 本机 UI 偏好：在画布里是否停靠到右侧，以及停靠宽度。账号切换不影响。 */
     dock: AgentPanelDockPreference;
     openAgent: () => void;
     closeAgent: () => void;
     setCanvas: (canvas: AgentCanvasContext | null) => void;
+    setPage: (page: AgentPageContext | null) => void;
     setDocked: (docked: boolean) => void;
     setDockWidth: (width: number) => void;
     reset: () => void;
@@ -113,6 +128,7 @@ function persistDockPreference(dock: AgentPanelDockPreference) {
 export const useGlobalAgentStore = create<GlobalAgentStore>()((set, get) => ({
     open: false,
     canvas: null,
+    page: null,
     dock: readDockPreference(),
     openAgent: () => set({ open: true }),
     closeAgent: () => set({ open: false }),
@@ -122,6 +138,7 @@ export const useGlobalAgentStore = create<GlobalAgentStore>()((set, get) => ({
             // 返回同一个 state 时 zustand 不通知订阅者。
             return next === state.canvas ? state : { canvas: next };
         }),
+    setPage: (page) => set({ page }),
     setDocked: (docked) => {
         const dock = { ...get().dock, docked };
         set({ dock });
@@ -133,5 +150,5 @@ export const useGlobalAgentStore = create<GlobalAgentStore>()((set, get) => ({
         set({ dock });
         persistDockPreference(dock);
     },
-    reset: () => set({ open: false, canvas: null }),
+    reset: () => set({ open: false, canvas: null, page: null }),
 }));

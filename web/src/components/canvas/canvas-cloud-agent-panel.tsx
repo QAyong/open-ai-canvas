@@ -174,8 +174,9 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
     const domainProjectId = useGlobalAgentStore((state) => state.canvas?.domainProjectId);
     const nodeCount = useGlobalAgentStore((state) => state.canvas?.nodeCount ?? 0);
     const references = useGlobalAgentStore((state) => state.canvas?.references ?? EMPTY_REFERENCES);
-    const prefillRequest = useGlobalAgentStore((state) => state.canvas?.prefillRequest ?? null);
+    const prefillRequest = useGlobalAgentStore((state) => state.canvas?.prefillRequest ?? state.page?.prefillRequest ?? null);
     const onFocusNode = useGlobalAgentStore((state) => state.canvas?.onFocusNode);
+    const launcherHidden = useGlobalAgentStore((state) => state.page?.launcherHidden ?? false);
     const open = useGlobalAgentStore((state) => state.open);
     const onOpen = useGlobalAgentStore((state) => state.openAgent);
     const onCollapse = useGlobalAgentStore((state) => state.closeAgent);
@@ -2386,7 +2387,7 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
 
     return (
         <>
-            <AgentLauncher theme={theme} statusColor={statusColor} approvalPending={Boolean(approval)} reducedMotion={Boolean(reducedMotion)} status={status} hidden={open} onOpen={onOpen} />
+            <AgentLauncher theme={theme} statusColor={statusColor} approvalPending={Boolean(approval)} reducedMotion={Boolean(reducedMotion)} status={status} hidden={open || launcherHidden} onOpen={onOpen} />
             <AnimatePresence>
                 {open ? (
                     <motion.aside

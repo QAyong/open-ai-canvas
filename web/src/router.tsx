@@ -212,6 +212,7 @@ export const router = createBrowserRouter([
             { path: "/projects/:projectId/*", element: <Navigate to=".." relative="path" replace /> },
             { path: "/canvas", element: <RequireAuth>{deferred(<CanvasPage />)}</RequireAuth> },
             { path: "/compliance", element: <RequireAuth>{deferred(<CompliancePage />)}</RequireAuth> },
+            { path: "/compliance/:id", element: <RequireAuth>{deferred(<CompliancePage />)}</RequireAuth> },
             {
                 path: "/canvas/:id",
                 element: (

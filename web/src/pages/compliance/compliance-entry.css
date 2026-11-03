@@ -1,0 +1,175 @@
+/* 合规入口在画布入口样式（canvas-short-drama-entry.css）之上的补充：素材槽位、三列能力卡片。 */
+/* 画布里舞台盖在视口上；工作台页面里由外层 relative 容器撑满即可，不能抬高层级盖住顶栏浮层。 */
+.canvas-entry-stage.compliance-entry-stage {
+    z-index: 0;
+}
+
+/* 提交后输入框缩小并飞向右下角（Agent 面板和悬浮球所在的位置），之后才进入结果页。 */
+.compliance-entry-stage.is-leaving .canvas-entry-shell {
+    transform: translate(32vw, 28vh) scale(0.1);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+        transform 320ms var(--motion-ease-out),
+        opacity 260ms ease-in;
+}
+
+.compliance-entry-stage.is-leaving .canvas-entry-ripple {
+    opacity: 0;
+    transition: opacity 200ms ease-out;
+}
+
+.compliance-entry-slots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid var(--canvas-entry-hairline);
+}
+
+.compliance-entry-slot {
+    min-width: 0;
+    flex: 1 1 180px;
+}
+
+.compliance-entry-slot-label,
+.compliance-entry-subject {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    color: var(--canvas-entry-muted);
+    font-size: var(--fs-label);
+}
+
+.compliance-entry-slot-label {
+    margin-bottom: var(--space-2);
+}
+
+.compliance-entry-slot-label em {
+    color: var(--status-error);
+    font-style: normal;
+}
+
+.compliance-entry-slot-label small {
+    color: color-mix(in srgb, var(--canvas-entry-muted) 70%, transparent);
+    font-size: var(--fs-tiny);
+}
+
+.compliance-entry-slot-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.compliance-entry-thumb,
+.compliance-entry-add {
+    width: 56px;
+    height: 56px;
+    border-radius: var(--r-xl);
+}
+
+.compliance-entry-thumb {
+    position: relative;
+    overflow: hidden;
+    border: 1px solid var(--canvas-entry-hairline);
+}
+
+.compliance-entry-thumb img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+.compliance-entry-thumb button {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    display: grid;
+    width: 20px;
+    height: 20px;
+    place-items: center;
+    border: 0;
+    border-radius: var(--r-full);
+    background: color-mix(in srgb, var(--canvas-entry-surface) 90%, transparent);
+    color: var(--canvas-entry-text);
+    opacity: 0;
+    transition: opacity var(--motion-state) ease;
+}
+
+.compliance-entry-thumb:hover button,
+.compliance-entry-thumb button:focus-visible {
+    opacity: 1;
+}
+
+.compliance-entry-thumb button svg {
+    width: 12px;
+    height: 12px;
+}
+
+.compliance-entry-add {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 2px;
+    border: 1px dashed var(--canvas-entry-hairline);
+    background: transparent;
+    color: var(--canvas-entry-muted);
+    font-size: var(--fs-tiny);
+    transition:
+        background-color var(--motion-state) ease,
+        color var(--motion-state) ease;
+}
+
+.compliance-entry-add:hover {
+    background: var(--canvas-entry-chip);
+    color: var(--canvas-entry-text);
+}
+
+.compliance-entry-add svg {
+    width: 16px;
+    height: 16px;
+}
+
+.compliance-entry-subject {
+    flex: 1 1 100%;
+}
+
+.compliance-entry-subject input {
+    width: 200px;
+    max-width: 100%;
+    height: var(--space-8);
+    padding: 0 var(--space-2);
+    border: 1px solid var(--canvas-entry-hairline);
+    border-radius: var(--button-radius);
+    background: transparent;
+    color: var(--canvas-entry-text);
+    font: inherit;
+    font-size: var(--fs-caption);
+    outline: none;
+}
+
+.compliance-entry-subject input:focus-visible {
+    border-color: color-mix(in srgb, var(--canvas-entry-text) 35%, transparent);
+}
+
+.compliance-entry-paths {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.compliance-entry-paths button[aria-pressed="true"] {
+    border-color: color-mix(in srgb, var(--canvas-entry-text) 45%, transparent);
+    background: var(--canvas-entry-surface);
+}
+
+.canvas-entry-shell .compliance-entry-paths button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+@media (max-width: 640px) {
+    .compliance-entry-paths {
+        grid-template-columns: minmax(0, 1fr);
+    }
+}
