@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -6,11 +7,41 @@ import { MemoryRouter, Route, Routes } from "react-router";
 
 import { navigationTools } from "../src/constant/navigation-tools";
 import CompliancePage from "../src/pages/compliance";
-import { buildAgentPrompt, complianceSteps, FACE_MATCH_THRESHOLD, FACE_SUSPECT_THRESHOLD, faceVerdictOf, overallVerdictOf } from "../src/pages/compliance/compliance-check";
-import { useComplianceCheckStore } from "../src/pages/compliance/compliance-check-store";
+import { ComplianceFaceResult } from "../src/pages/compliance/compliance-face-result";
+import { buildAgentPrompt, resolveComposerSubmit } from "../src/pages/compliance/compliance-check";
+import type { ComplianceCheck } from "../src/services/api/compliance";
 import { useGlobalAgentStore } from "../src/stores/use-global-agent-store";
 
 const source = (path: string) => readFileSync(resolve(import.meta.dir, path), "utf8");
+
+function renderPage(path: string) {
+    return renderToStaticMarkup(
+        <QueryClientProvider client={new QueryClient()}>
+            <MemoryRouter initialEntries={[path]}>
+                <Routes>
+                    <Route path="/compliance" element={<CompliancePage />} />
+                    <Route path="/compliance/:id" element={<CompliancePage />} />
+                </Routes>
+            </MemoryRouter>
+        </QueryClientProvider>,
+    );
+}
+
+const baseCheck: ComplianceCheck = {
+    id: "chk_1",
+    kind: "face_compare",
+    prompt: "",
+    subjectName: "张三",
+    status: "done",
+    stepsDone: 3,
+    stepCount: 3,
+    thresholds: { match: 85, suspect: 70 },
+    target: { resourceId: "res_t", name: "still.png" },
+    bases: [{ resourceId: "res_b", name: "base.png" }],
+    result: { overall: "review", faces: [{ index: 1, box: { x: 10, y: 10, w: 30, h: 40 }, similarity: 78, bestBaseIndex: 0, verdict: "suspect" }] },
+    createdAt: "2026-11-03T10:00:00Z",
+    updatedAt: "2026-11-03T10:00:03Z",
+};
 
 describe("合规平台入口", () => {
     test("紧跟自由画布并使用独立路由", () => {
@@ -29,63 +60,64 @@ describe("合规平台入口", () => {
     });
 
     test("空态只有核验输入框和能力卡片，没有结果", () => {
-        const html = renderToStaticMarkup(
-            <MemoryRouter initialEntries={["/compliance"]}>
-                <CompliancePage />
-            </MemoryRouter>,
-        );
+        const html = renderPage("/compliance");
         expect(html).toContain("<textarea");
         expect(html).toContain("人脸比对");
         expect(html).toContain("即将上线");
         expect(html).not.toContain("核验结论");
     });
 
-    test("找不到核验记录时给出回到空态的入口", () => {
-        const html = renderToStaticMarkup(
-            <MemoryRouter initialEntries={["/compliance/missing"]}>
-                <Routes>
-                    <Route path="/compliance/:id" element={<CompliancePage />} />
-                </Routes>
-            </MemoryRouter>,
-        );
-        expect(html).toContain("没有找到这次核验");
+    test("核验记录加载前显示加载状态，不显示输入框", () => {
+        const html = renderPage("/compliance/chk_1");
+        expect(html).toContain("正在加载核验");
         expect(html).not.toContain("<textarea");
     });
 });
 
-describe("人脸比对演示判定", () => {
-    const face = (similarity: number) => ({ index: 1, box: { x: 0, y: 0, w: 1, h: 1 }, similarity, bestBaseIndex: 0, verdict: faceVerdictOf(similarity) });
+describe("人脸比对结果视图", () => {
+    const render = (check: ComplianceCheck) => renderToStaticMarkup(<ComplianceFaceResult check={check} onNew={() => {}} />);
 
-    test("相似度按阈值分档", () => {
-        expect(faceVerdictOf(FACE_MATCH_THRESHOLD)).toBe("match");
-        expect(faceVerdictOf(FACE_MATCH_THRESHOLD - 1)).toBe("suspect");
-        expect(faceVerdictOf(FACE_SUSPECT_THRESHOLD)).toBe("suspect");
-        expect(faceVerdictOf(FACE_SUSPECT_THRESHOLD - 1)).toBe("mismatch");
+    test("完成后显示结论、人脸明细和后端给出的判定阈值", () => {
+        const html = render(baseCheck);
+        expect(html).toContain("建议复核");
+        expect(html).toContain("78%");
+        expect(html).toContain("相似度 ≥ 85% 为一致，70%–85% 为疑似，低于 70% 为不一致");
+        expect(html).toContain("/resources/res_t/file");
+        expect(html).not.toContain("演示数据");
     });
 
-    test("多出未匹配的人脸时转人工复核，不直接通过", () => {
-        expect(overallVerdictOf([])).toBe("no_face");
-        expect(overallVerdictOf([face(95)])).toBe("pass");
-        expect(overallVerdictOf([face(95), face(40)])).toBe("review");
-        expect(overallVerdictOf([face(75)])).toBe("review");
-        expect(overallVerdictOf([face(40)])).toBe("risk");
+    test("运行中只显示素材和进度，不显示结论与人脸框", () => {
+        const html = render({ ...baseCheck, status: "running", stepsDone: 1, result: undefined });
+        expect(html).toContain("正在检测并比对");
+        expect(html).not.toContain("核验结论");
+        expect(html).not.toContain("逐脸明细");
+    });
+
+    test("失败时显示原因并保留素材", () => {
+        const html = render({ ...baseCheck, status: "failed", stepsDone: 0, result: undefined, error: "核验失败，请稍后重试" });
+        expect(html).toContain('role="alert"');
+        expect(html).toContain("核验失败，请稍后重试");
+        expect(html).toContain("/resources/res_b/file");
     });
 });
 
-describe("核验进度与 Agent 上下文", () => {
-    const image = (name: string) => ({ url: `blob:${name}`, name });
-    const input = { skillId: "face-compare" as const, prompt: "", subjectName: "张三", target: image("still.png"), bases: [image("a.png"), image("b.png")] };
-
-    test("核验按步骤推进，最后一步完成才算结束", async () => {
-        const id = useComplianceCheckStore.getState().create(input, 5);
-        expect(useComplianceCheckStore.getState().checks[id]).toMatchObject({ status: "running", stepsDone: 0 });
-        await Bun.sleep(5 * complianceSteps.length + 60);
-        expect(useComplianceCheckStore.getState().checks[id]).toMatchObject({ status: "done", stepsDone: complianceSteps.length });
+describe("输入框提交方式", () => {
+    test("没选能力也没放图片时，纯文字可以直接发给 Agent", () => {
+        expect(resolveComposerSubmit({ skillId: null, hasTarget: false, baseCount: 0, prompt: "你好" })).toEqual({ mode: "chat", canSubmit: true, missing: [] });
+        expect(resolveComposerSubmit({ skillId: null, hasTarget: false, baseCount: 0, prompt: "  " }).canSubmit).toBe(false);
     });
 
-    test("发给 Agent 的首条消息带上素材清单", () => {
-        expect(buildAgentPrompt(input)).toBe("请帮我核验这次人脸比对。（待核验素材：still.png；授权底图 2 张；授权人：张三）");
-        expect(buildAgentPrompt({ ...input, prompt: "这是演员本人吗？", subjectName: "" })).toBe("这是演员本人吗？（待核验素材：still.png；授权底图 2 张）");
+    test("选了人脸比对或放了图片就是创建核验，素材不齐不能发，并说明缺什么", () => {
+        expect(resolveComposerSubmit({ skillId: "face-compare", hasTarget: false, baseCount: 0, prompt: "你好" })).toEqual({ mode: "check", canSubmit: false, missing: ["待核验素材", "授权底图"] });
+        expect(resolveComposerSubmit({ skillId: null, hasTarget: true, baseCount: 0, prompt: "" })).toEqual({ mode: "check", canSubmit: false, missing: ["授权底图"] });
+        expect(resolveComposerSubmit({ skillId: "face-compare", hasTarget: true, baseCount: 2, prompt: "" })).toEqual({ mode: "check", canSubmit: true, missing: [] });
+    });
+});
+
+describe("Agent 上下文", () => {
+    test("发给 Agent 的首条消息带上素材清单，没有描述时让它先读结果", () => {
+        expect(buildAgentPrompt({ prompt: "", subjectName: "张三", targetName: "still.png", baseCount: 2 })).toBe("请先读取核验结果，再解读并给出处置建议。（待核验素材：still.png；授权底图 2 张；授权人：张三）");
+        expect(buildAgentPrompt({ prompt: "这是演员本人吗？", subjectName: "", targetName: "still.png", baseCount: 1 })).toBe("这是演员本人吗？（待核验素材：still.png；授权底图 1 张）");
     });
 
     test("页面上下文不占用画布上下文，复位时一并清空", () => {
@@ -96,5 +128,11 @@ describe("核验进度与 Agent 上下文", () => {
         expect(useGlobalAgentStore.getState().page).toMatchObject({ checkId: null, launcherHidden: true });
         store.reset();
         expect(useGlobalAgentStore.getState().page).toBeNull();
+    });
+
+    test("面板把合规核验 ID 带进 Agent 请求，且不绑定画布", () => {
+        const panel = source("../src/components/canvas/canvas-cloud-agent-panel.tsx");
+        expect(panel).toContain('const complianceCheckId = useGlobalAgentStore((state) => state.page?.checkId ?? "")');
+        expect(panel).toContain("...(complianceCheckId ? { complianceCheckId } : {})");
     });
 });

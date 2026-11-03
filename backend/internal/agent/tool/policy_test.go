@@ -10,7 +10,7 @@ import (
 var (
 	legacyWrite      = []string{"canvas_apply_ops", "canvas_arrange_nodes", "generate_media", "image_layer_split", "canvas_create_storyboard", "canvas_edit_storyboard", "canvas_edit_batch_table", "canvas_create_character", "previs_scene_create", "previs_apply_patch", "drama_adopt_canvas_media"}
 	legacyCacheable  = []string{"agent_profile_read", "canvas_get_state", "canvas_read_storyboard", "previs_scene_read", "skill_read_file", "model_list"}
-	legacyReadOnly   = []string{"agent_profile_read", "canvas_get_state", "canvas_read_text", "canvas_read_storyboard", "previs_scene_read", "canvas_read_batch_table", "canvas_list_node_types", "skill_read_file", "skill_search", "skill_market_search", "model_list", "task_get", "drama_get_context"}
+	legacyReadOnly   = []string{"agent_profile_read", "canvas_get_state", "canvas_read_text", "canvas_read_storyboard", "previs_scene_read", "canvas_read_batch_table", "canvas_list_node_types", "skill_read_file", "skill_search", "skill_market_search", "model_list", "task_get", "drama_get_context", "compliance_get_check"}
 	legacyCanvasRev  = []string{"canvas_get_state", "canvas_read_text", "canvas_read_storyboard", "previs_scene_read"}
 	legacyOffsetNorm = []string{"skill_read_file", "canvas_get_state", "canvas_read_text", "canvas_read_storyboard", "canvas_read_batch_table"}
 	legacyMedia      = []string{"generate_media", "image_layer_split"}

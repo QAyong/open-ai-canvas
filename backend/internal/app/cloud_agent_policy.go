@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"yingce/backend/internal/compliance"
 	"yingce/backend/internal/prompts"
 )
 
@@ -129,6 +130,10 @@ func compileCloudAgentPolicies(req CloudAgentRequest, agentName string, skillCat
 	if len(anchors) > 0 {
 		// User intent remains in user messages, never frozen into system context.
 		context["referenceCandidates"] = anchors[0].ReferenceAssets
+	}
+	if req.ComplianceLinked {
+		// 只投影事实：绑定了哪次核验。状态与结果每次都经 compliance_get_check 读取，不写进可缓存的前缀。
+		context["compliance"] = map[string]any{"checkId": req.ComplianceCheckID, "kind": compliance.KindFaceCompare}
 	}
 	if skillCatalog != nil {
 		context["skillCatalog"] = map[string]int{"installed": skillCatalog.Installed, "described": skillCatalog.Described, "namesOnly": skillCatalog.NamesOnly, "omitted": skillCatalog.Omitted}

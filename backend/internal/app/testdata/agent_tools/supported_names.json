@@ -30,5 +30,6 @@
   "canvas_arrange_nodes",
   "generate_media",
   "drama_get_context",
-  "drama_adopt_canvas_media"
+  "drama_adopt_canvas_media",
+  "compliance_get_check"
 ]

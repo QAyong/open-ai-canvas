@@ -38,6 +38,7 @@ func cloudAgentToolHandlers() map[string]cloudAgentToolHandler {
 		agenttool.CanvasArrangeNodes:     {Write: applyCloudAgentArrangeNodes, Preview: cloudAgentPreviewArrange},
 		agenttool.GenerateMedia:          {Pipeline: cloudAgentToolMedia},
 		agenttool.DramaGetContext:        {Read: cloudAgentHandleDramaGetContext},
+		agenttool.ComplianceGetCheck:     {Read: cloudAgentHandleComplianceGetCheck},
 		agenttool.DramaAdoptCanvasMedia:  {Write: applyCloudAgentDramaAdopt, Preview: cloudAgentPreviewDramaAdopt},
 	}
 }

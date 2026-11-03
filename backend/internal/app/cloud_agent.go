@@ -55,6 +55,10 @@ type CloudAgentRequest struct {
 	// DramaLinked 决定是否暴露短剧工具：服务端在建 run 时按画布是否关联当前用户的短剧作品推导，
 	// 客户端传入值被覆盖；与 VisionEnabled 一样必须持久化，工具授权每步都从落库状态重建。
 	DramaLinked bool `json:"dramaLinked,omitempty"`
+	// ComplianceCheckID 是页面绑定的合规核验；ComplianceLinked 由服务端校验该核验属于当前用户后推导并持久化，
+	// 决定是否暴露合规工具，客户端传入值被覆盖。合规对话不绑定画布。
+	ComplianceCheckID string `json:"complianceCheckId,omitempty"`
+	ComplianceLinked  bool   `json:"complianceLinked,omitempty"`
 	// SkillsEnabled / MemoryMode 同样由服务端建 run 时推导并持久化：前者表示本轮有可读的已安装技能，
 	// 后者是冻结的长期记忆模式（auto/review/off），决定是否暴露技能读取与记忆写入工具。
 	SkillsEnabled bool   `json:"skillsEnabled,omitempty"`
@@ -389,6 +393,17 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 			return nil, err
 		}
 	}
+	// 合规核验是可选绑定：绑定时必须属于当前用户，客户端只传 ID，是否暴露合规工具由服务端推导。
+	complianceBound := false
+	if req.ComplianceCheckID != "" {
+		if _, _, err := s.repo.ComplianceCheckForUser(userID, req.ComplianceCheckID); err != nil {
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				return nil, kernel.NotFound("核验不存在")
+			}
+			return nil, err
+		}
+		complianceBound = true
+	}
 	// Resolve and freeze the effective preference document before idempotency
 	// lookup. A retry without an explicit revision must still refer to the same
 	// immutable input; a changed profile therefore cannot silently create a
@@ -403,6 +418,7 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 	req.ProfileRevision = profile.Revision
 	// 下面这些字段由服务端推导，客户端传入值不参与幂等指纹。
 	req.VisionEnabled, req.DramaLinked, req.SkillsEnabled, req.MemoryMode = false, false, false, ""
+	req.ComplianceLinked = false
 	id := cloudAgentID(userID, req.IdempotencyKey)
 	fingerprint := cloudAgentFingerprint(req, parentID)
 	if existing, state, lookupErr := s.cloudAgentTask(userID, id); lookupErr == nil {
@@ -522,6 +538,7 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 	// 持久化：工具授权每步都从落库状态重建，运行期间不再变化，客户端传入值被忽略。
 	req.VisionEnabled = s.cloudAgentVisionEnabled(req)
 	req.DramaLinked = len(req.ContextScope) != 0 && dramaLinkedCanvas(s.repo, canvas)
+	req.ComplianceLinked = complianceBound
 	req.SkillsEnabled = len(skillPool.Versions) > 0
 	req.MemoryMode = memory.Mode
 	canvasSummary := ""

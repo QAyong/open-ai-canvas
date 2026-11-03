@@ -187,6 +187,50 @@ paths:
         "400": {$ref: "#/components/responses/Error"}
         "401": {$ref: "#/components/responses/Error"}
         "500": {$ref: "#/components/responses/Error"}
+  /compliance/checks:
+    post:
+      tags: [compliance]
+      summary: 创建一次合规核验（人脸比对）并在后台开始运行
+      description: 图片必须是当前用户已上传完成的图片资源；授权底图 1 到 3 张。创建后用 GET 轮询进度。
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ComplianceCheckCreate"}
+      responses:
+        "200":
+          description: 成功信封，data 为刚创建的核验（status 为 running）
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: {$ref: "#/components/schemas/ComplianceCheck"}
+        "400": {$ref: "#/components/responses/Error"}
+        "401": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
+  /compliance/checks/{id}:
+    get:
+      tags: [compliance]
+      summary: 读取当前用户自己的一次合规核验
+      parameters:
+        - {in: path, name: id, required: true, schema: {type: string}}
+      responses:
+        "200":
+          description: 成功信封，data 为核验；完成前没有 result
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Envelope"
+                  - type: object
+                    properties:
+                      data: {$ref: "#/components/schemas/ComplianceCheck"}
+        "401": {$ref: "#/components/responses/Error"}
+        "404": {$ref: "#/components/responses/Error"}
+        "500": {$ref: "#/components/responses/Error"}
   /admin/feedbacks:
     get:
       tags: [feedback, admin]
@@ -2569,6 +2613,76 @@ components:
         url: {type: string}
         size: {type: integer, format: int64, minimum: 0}
         mimeType: {type: string}
+    ComplianceImage:
+      type: object
+      required: [resourceId, name]
+      properties:
+        resourceId: {type: string, description: 已上传图片资源的 ID}
+        name: {type: string, description: 原文件名，最多 256 个字符}
+    ComplianceCheckCreate:
+      type: object
+      required: [kind, target, bases]
+      properties:
+        kind: {type: string, enum: [face_compare]}
+        prompt: {type: string, description: 最多 2000 个字符}
+        subjectName: {type: string, description: 授权人姓名，最多 128 个字符}
+        target: {$ref: "#/components/schemas/ComplianceImage"}
+        bases:
+          type: array
+          minItems: 1
+          maxItems: 3
+          items: {$ref: "#/components/schemas/ComplianceImage"}
+    ComplianceFace:
+      type: object
+      required: [index, box, similarity, bestBaseIndex, verdict]
+      properties:
+        index: {type: integer, minimum: 1}
+        box:
+          type: object
+          required: [x, y, w, h]
+          description: 占图片宽高的百分比
+          properties:
+            x: {type: number}
+            y: {type: number}
+            w: {type: number}
+            h: {type: number}
+        similarity: {type: integer, minimum: 0, maximum: 100}
+        bestBaseIndex: {type: integer, minimum: 0}
+        verdict: {type: string, enum: [match, suspect, mismatch]}
+    ComplianceCheck:
+      type: object
+      required: [id, kind, prompt, subjectName, status, stepsDone, stepCount, thresholds, target, bases, createdAt, updatedAt]
+      properties:
+        id: {type: string}
+        kind: {type: string, enum: [face_compare]}
+        prompt: {type: string}
+        subjectName: {type: string}
+        status: {type: string, enum: [running, done, failed]}
+        stepsDone: {type: integer, minimum: 0}
+        stepCount: {type: integer}
+        thresholds:
+          type: object
+          description: 相似度（0-100）达到 match 为一致，介于 suspect 与 match 之间为疑似
+          required: [match, suspect]
+          properties:
+            match: {type: integer}
+            suspect: {type: integer}
+        target: {$ref: "#/components/schemas/ComplianceImage"}
+        bases:
+          type: array
+          items: {$ref: "#/components/schemas/ComplianceImage"}
+        result:
+          type: object
+          description: 仅 status 为 done 时存在；判定只来自比对引擎的相似度和固定阈值
+          required: [overall, faces]
+          properties:
+            overall: {type: string, enum: [pass, review, risk, no_face]}
+            faces:
+              type: array
+              items: {$ref: "#/components/schemas/ComplianceFace"}
+        error: {type: string}
+        createdAt: {type: string, format: date-time}
+        updatedAt: {type: string, format: date-time}
     UserFeedback:
       type: object
       required: [id, userId, userName, userEmail, contact, type, title, content, attachments, environment, status, adminReply, archived, createdAt, updatedAt]

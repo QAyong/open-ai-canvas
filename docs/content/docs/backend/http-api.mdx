@@ -88,6 +88,17 @@ description: 信封、错误码与 OpenAPI
 
 
 
+## 合规核验
+
+接口使用登录 Cookie 和标准业务信封；核验只属于创建它的账号，读取他人的核验按“不存在”（404）处理。图片必须是当前账号已上传完成的图片资源，先用 `POST /api/resources` 上传，再把资源 ID 交给核验。
+
+| 接口 | 入参与结果 |
+| --- | --- |
+| `POST /api/compliance/checks` | `{ kind:"face_compare", prompt?, subjectName?, target:{resourceId,name}, bases:[{resourceId,name}] }`；`bases` 1 到 3 张，同一角色下资源不能重复。创建后在后台运行，返回 `data` 核验（`status=running`） |
+| `GET /api/compliance/checks/{id}` | 返回核验：`status`、`stepsDone`/`stepCount`、`thresholds`（一致/疑似的相似度阈值）、`target`、`bases`，完成后带 `result={overall,faces[]}`，失败时带 `error`。页面运行中每 0.8 秒轮询 |
+
+Agent 运行请求可带 `complianceCheckId`：服务端校验该核验属于当前用户后，才为本轮开放只读工具 `compliance_get_check`（客户端传入的 `complianceLinked` 一律被覆盖），合规对话不绑定画布。该工具无参数，只读本轮绑定的那一次核验；核验仍在运行时最多等待 8 秒，超时如实返回“进行中”。
+
 ## Agent 画布权限与大事件
 
 自由画布和项目关联画布均使用 `canvas_projects`。Agent 运行时按登录账号和画布 ID 查询归属，不能把所属项目 ID 当作画布 ID；画布不存在、属于其他账号或数据库读取失败时，不声明读写及导出权限。

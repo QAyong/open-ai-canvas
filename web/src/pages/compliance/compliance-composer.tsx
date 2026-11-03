@@ -3,11 +3,11 @@
 
 import { App } from "antd";
 import { ArrowUp, ImagePlus, ShieldCheck, Upload, X } from "lucide-react";
-import { useRef, useState, type ChangeEvent, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type CSSProperties } from "react";
 
 import "@/components/canvas/canvas-short-drama-entry.css";
 import "./compliance-entry.css";
-import { complianceSkills, type ComplianceImage, type ComplianceSkillId, type NewComplianceCheck } from "./compliance-check";
+import { complianceSkills, resolveComposerSubmit, type ComplianceSkillId } from "./compliance-check";
 
 const MAX_BASE_IMAGES = 3;
 
@@ -23,11 +23,12 @@ const entryStyle = {
     "--canvas-entry-shadow": "color-mix(in srgb, var(--foreground) 10%, transparent)",
 } as CSSProperties;
 
-function toImage(file: File): ComplianceImage {
-    return { url: URL.createObjectURL(file), name: file.name };
-}
+/** 用户在输入框里选好、还没上传的图片；提交时由页面上传成资源。 */
+export type PickedImage = { url: string; name: string; file: File };
 
-function ImageSlot({ label, hint, images, multiple, onPick, onRemove }: { label: string; hint?: string; images: ComplianceImage[]; multiple: boolean; onPick: (files: File[]) => void; onRemove: (index: number) => void }) {
+export type ComplianceSubmitInput = { prompt: string; subjectName: string; target: PickedImage; bases: PickedImage[] };
+
+function ImageSlot({ label, hint, images, multiple, onPick, onRemove }: { label: string; hint?: string; images: PickedImage[]; multiple: boolean; onPick: (files: File[]) => void; onRemove: (index: number) => void }) {
     const inputRef = useRef<HTMLInputElement>(null);
     const full = multiple ? images.length >= MAX_BASE_IMAGES : images.length >= 1;
     const handleChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -62,17 +63,45 @@ function ImageSlot({ label, hint, images, multiple, onPick, onRemove }: { label:
     );
 }
 
-export function ComplianceComposer({ onSubmit, leaving = false }: { onSubmit: (input: NewComplianceCheck) => void; /** 提交后输入框飞向右下角的退场动画期间，不再接受输入和重复提交。 */ leaving?: boolean }) {
+export function ComplianceComposer({
+    onSubmit,
+    onChat,
+    submitting = false,
+    leaving = false,
+}: {
+    onSubmit: (input: ComplianceSubmitInput) => void;
+    /** 没选能力也没放图片时，纯文字直接发给 Agent 对话。 */ onChat: (prompt: string) => void;
+    /** 正在上传图片并创建核验：不接受重复提交。 */ submitting?: boolean;
+    /** 提交成功后输入框飞向右下角的退场动画期间。 */ leaving?: boolean;
+}) {
     const { message } = App.useApp();
     const importRef = useRef<HTMLInputElement>(null);
     const [skillId, setSkillId] = useState<ComplianceSkillId | null>(null);
     const [prompt, setPrompt] = useState("");
     const [subjectName, setSubjectName] = useState("");
-    const [target, setTarget] = useState<ComplianceImage | null>(null);
-    const [bases, setBases] = useState<ComplianceImage[]>([]);
+    const [target, setTarget] = useState<PickedImage | null>(null);
+    const [bases, setBases] = useState<PickedImage[]>([]);
+    const locked = submitting || leaving;
+    // 预览用的 object URL 在移除和离开页面时释放。
+    const urlsRef = useRef(new Set<string>());
+    useEffect(() => {
+        const urls = urlsRef.current;
+        return () => {
+            urls.forEach((url) => URL.revokeObjectURL(url));
+            urls.clear();
+        };
+    }, []);
+    const track = (file: File): PickedImage => {
+        const url = URL.createObjectURL(file);
+        urlsRef.current.add(url);
+        return { url, name: file.name, file };
+    };
+    const release = (url: string) => {
+        URL.revokeObjectURL(url);
+        urlsRef.current.delete(url);
+    };
 
-    const missing = skillId === "face-compare" ? [!target && "待核验素材", !bases.length && "授权底图"].filter(Boolean) : [];
-    const canSubmit = skillId === "face-compare" && !missing.length;
+    const { mode, canSubmit, missing } = resolveComposerSubmit({ skillId, hasTarget: Boolean(target), baseCount: bases.length, prompt });
 
     const imagesOf = (files: File[]) => {
         const images = files.filter((file) => file.type.startsWith("image/"));
@@ -82,12 +111,12 @@ export function ComplianceComposer({ onSubmit, leaving = false }: { onSubmit: (i
     const pickTarget = (files: File[]) => {
         const [file] = imagesOf(files);
         if (!file) return;
-        if (target) URL.revokeObjectURL(target.url);
-        setTarget(toImage(file));
+        if (target) release(target.url);
+        setTarget(track(file));
     };
     const pickBases = (files: File[]) => {
         const accepted = imagesOf(files).slice(0, MAX_BASE_IMAGES - bases.length);
-        if (accepted.length) setBases([...bases, ...accepted.map(toImage)]);
+        if (accepted.length) setBases([...bases, ...accepted.map(track)]);
     };
     // 「导入素材」先补待核验素材，再补授权底图；顺序和输入框里两个槽位一致。
     const importFiles = (files: File[]) => {
@@ -95,27 +124,33 @@ export function ComplianceComposer({ onSubmit, leaving = false }: { onSubmit: (i
         if (!images.length) return;
         setSkillId((current) => current ?? "face-compare");
         const [first, ...rest] = images;
-        if (!target) setTarget(toImage(first));
+        if (!target) setTarget(track(first));
         const forBases = target ? images : rest;
         const accepted = forBases.slice(0, MAX_BASE_IMAGES - bases.length);
-        if (accepted.length) setBases([...bases, ...accepted.map(toImage)]);
+        if (accepted.length) setBases([...bases, ...accepted.map(track)]);
     };
     const removeBase = (index: number) => {
-        URL.revokeObjectURL(bases[index].url);
+        release(bases[index].url);
         setBases(bases.filter((_, i) => i !== index));
     };
     const removeTarget = () => {
-        if (target) URL.revokeObjectURL(target.url);
+        if (target) release(target.url);
         setTarget(null);
     };
 
     const submit = () => {
-        if (!canSubmit || !target || leaving) return;
-        onSubmit({ skillId: "face-compare", prompt: prompt.trim(), subjectName: subjectName.trim(), target, bases });
+        if (!canSubmit || locked) return;
+        if (mode === "chat") {
+            onChat(prompt.trim());
+            setPrompt("");
+            return;
+        }
+        if (!target) return;
+        onSubmit({ prompt: prompt.trim(), subjectName: subjectName.trim(), target, bases });
     };
 
     return (
-        <div className={`canvas-entry-stage compliance-entry-stage${leaving ? " is-leaving" : ""}`} style={entryStyle} aria-busy={leaving || undefined}>
+        <div className={`canvas-entry-stage compliance-entry-stage${leaving ? " is-leaving" : ""}`} style={entryStyle} aria-busy={locked || undefined}>
             <div className="canvas-entry-ripple" aria-hidden="true">
                 <span />
                 <span />
@@ -167,7 +202,7 @@ export function ComplianceComposer({ onSubmit, leaving = false }: { onSubmit: (i
                             导入素材
                         </button>
                         <span className="canvas-entry-hint">{missing.length ? `还需要：${missing.join("、")}` : "Enter 发送 · Shift+Enter 换行"}</span>
-                        <button type="submit" className="canvas-entry-send" disabled={!canSubmit} aria-label="开始核验">
+                        <button type="submit" className="canvas-entry-send" disabled={!canSubmit || locked} aria-label={mode === "chat" ? "发送给 Agent" : "开始核验"}>
                             <ArrowUp aria-hidden="true" />
                         </button>
                     </div>

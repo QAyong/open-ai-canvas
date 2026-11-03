@@ -58,6 +58,8 @@ type Policy struct {
 	RequiresMemory bool
 	// RequiresDrama 只在画布关联了当前用户的短剧作品时暴露。
 	RequiresDrama bool
+	// RequiresCompliance 只在本轮绑定了当前用户的合规核验时暴露。
+	RequiresCompliance bool
 	// AlwaysApprove 让写入在 auto 模式下也先审批：写入会改变画布以外的业务对象（如短剧版本）。
 	AlwaysApprove bool
 	// OutsideTransaction performs storage IO before the checkpoint transaction.
@@ -73,6 +75,8 @@ type Scope struct {
 	IncludeProfile bool
 	// Drama 表示本轮画布关联了当前用户的短剧作品，由服务端建 run 时推导。
 	Drama bool
+	// Compliance 表示本轮绑定了当前用户的合规核验，由服务端建 run 时校验归属后推导。
+	Compliance bool
 	// Memory 表示本轮长期记忆处于开启状态（自动生效或需确认），由服务端建 run 时冻结。
 	Memory bool
 }
@@ -83,6 +87,7 @@ func (p Policy) Allowed(scope Scope) bool {
 		(!p.RequiresSkills || scope.Skills) &&
 		(!p.RequiresMemory || scope.Memory) &&
 		(!p.RequiresDrama || scope.Drama) &&
+		(!p.RequiresCompliance || scope.Compliance) &&
 		(!p.Vision || scope.Vision) &&
 		(!p.Write() && !p.RequiresWriteMode || !scope.ReadOnly) &&
 		(p.Name != AgentProfileRead || scope.IncludeProfile)
@@ -135,6 +140,7 @@ const (
 	GenerateMedia          = "generate_media"
 	DramaGetContext        = "drama_get_context"
 	DramaAdoptCanvasMedia  = "drama_adopt_canvas_media"
+	ComplianceGetCheck     = "compliance_get_check"
 )
 
 var offsets = []string{"offset", "connectionOffset", "storyboardOffset"}
@@ -188,6 +194,7 @@ func policies() []Policy {
 		{Name: GenerateMedia, Kind: KindMedia, RequiresCanvas: true},
 		{Name: DramaGetContext, Kind: KindRead, RequiresCanvas: true, RequiresDrama: true, OutsideTransaction: true},
 		{Name: DramaAdoptCanvasMedia, Kind: KindWrite, RequiresCanvas: true, RequiresDrama: true, AlwaysApprove: true},
+		{Name: ComplianceGetCheck, Kind: KindRead, RequiresCompliance: true, OutsideTransaction: true},
 	}
 }
 

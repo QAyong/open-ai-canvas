@@ -177,6 +177,7 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
     const prefillRequest = useGlobalAgentStore((state) => state.canvas?.prefillRequest ?? state.page?.prefillRequest ?? null);
     const onFocusNode = useGlobalAgentStore((state) => state.canvas?.onFocusNode);
     const launcherHidden = useGlobalAgentStore((state) => state.page?.launcherHidden ?? false);
+    const complianceCheckId = useGlobalAgentStore((state) => state.page?.checkId ?? "");
     const open = useGlobalAgentStore((state) => state.open);
     const onOpen = useGlobalAgentStore((state) => state.openAgent);
     const onCollapse = useGlobalAgentStore((state) => state.closeAgent);
@@ -1452,6 +1453,7 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
                     focusNodeOmittedCount: canvasId ? focus.focusNodeOmittedCount : 0,
                     permissionMode: settings.permissionMode,
                     contextScope: canvasId ? settings.contextScope : [],
+                    ...(complianceCheckId ? { complianceCheckId } : {}),
                     budget: {
                         maxCredits: positiveNumber(settings.maxCredits),
                         maxGenerationTasks: settings.permissionMode === "read_only" ? 0 : Number(settings.maxGenerationTasks),

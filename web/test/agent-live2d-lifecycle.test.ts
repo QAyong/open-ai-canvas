@@ -9,7 +9,7 @@ const avatarSource = readFileSync(new URL("../src/components/canvas/live2d-avata
 
 test("Live2D launcher remains mounted while the Agent panel is open", () => {
     expect(panelSource).toContain("<AgentLauncher");
-    expect(panelSource).toContain("hidden={open}");
+    expect(panelSource).toContain("hidden={open || launcherHidden}");
     expect(panelSource).not.toContain("{!open ? <AgentLauncher");
     expect(partsSource).toContain("hidden = false");
     expect(partsSource).toContain('display: "none"');

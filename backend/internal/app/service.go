@@ -13,6 +13,7 @@ import (
 
 	"yingce/backend/internal/auth"
 	"yingce/backend/internal/canvas"
+	"yingce/backend/internal/compliance"
 	"yingce/backend/internal/kernel"
 	"yingce/backend/internal/model"
 	"yingce/backend/internal/payment"
@@ -28,6 +29,7 @@ import (
 
 type Service struct {
 	repo                     *repository.Repository
+	complianceComparer       compliance.FaceComparer
 	dataDir                  string
 	cancelMu                 sync.Mutex
 	registrationMu           sync.Mutex

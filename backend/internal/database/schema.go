@@ -133,6 +133,8 @@ func Models() []any {
 		&model.TaskLog{},
 		&model.Result{},
 		&model.UserFeedback{},
+		&model.ComplianceCheck{},
+		&model.ComplianceCheckImage{},
 		&model.DramaProduction{},
 		&model.DramaCast{},
 		&model.DramaEpisode{},
