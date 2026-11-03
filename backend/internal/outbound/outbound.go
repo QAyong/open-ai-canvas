@@ -322,7 +322,7 @@ func newOutboundTransport(resolveHost func(context.Context, string) ([]net.IP, e
 			if err != nil {
 				return nil, err
 			}
-			return dialer.DialContext(ctx, network, net.JoinHostPort(addresses[0].String(), port))
+			return dialPinnedAddresses(ctx, dialer.DialContext, network, addresses, port)
 		},
 		ForceAttemptHTTP2:     true,
 		MaxIdleConns:          100,
