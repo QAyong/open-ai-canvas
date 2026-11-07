@@ -365,7 +365,7 @@ func (s *Service) DramaSummary(userID string, projectID string) (DramaSummary, e
 			ID: episode.ID, Number: episode.Number, Title: episode.Title, Synopsis: truncateRunes(episode.Synopsis, 120), Stage: episode.Stage, SourceFormat: production.NormalizeSourceFormat(episode.SourceFormat), Error: episode.Error,
 			ShotCount: episode.ShotCount, DurationMs: episode.DurationMs, Approved: episode.Approved, MediaReleased: episode.MediaReleased, AwaitingMedia: held,
 			FinalResourceID: episode.FinalResourceID, FinalStale: episode.FinalStale,
-			Stats:    DramaEpisodeStats{Segments: stat.Total, PromptReady: stat.PromptReady, VideoReady: stat.VideoReady, Failed: stat.Failed},
+			Stats:    DramaEpisodeStats{Segments: stat.Total, PromptReady: stat.PromptReady, VideoReady: stat.VideoReady, VideoGenerated: stat.VideoGenerated, Failed: stat.Failed},
 			Revision: episode.Revision, UpdatedAt: episode.UpdatedAt.Format(time.RFC3339),
 		})
 		if episode.Stage == model.DramaEpisodeReview {
@@ -621,7 +621,7 @@ func dramaJobTaskView(task *model.Task, labels map[string]string) *DramaJobTaskV
 }
 
 func (s *Service) DramaJobs(userID string, projectID string, limit int) ([]DramaJobView, error) {
-	project, _, err := s.dramaForUser(userID, projectID)
+	project, productionRow, err := s.dramaForUser(userID, projectID)
 	if err != nil {
 		return nil, err
 	}
@@ -637,6 +637,13 @@ func (s *Service) DramaJobs(userID string, projectID string, limit int) ([]Drama
 		views = append(views, dramaJobView(job))
 	}
 	if err := s.attachDramaProviderStages(project.UserID, views); err != nil {
+		return nil, err
+	}
+	waiting := make([]*DramaJobView, len(views))
+	for i := range views {
+		waiting[i] = &views[i]
+	}
+	if err := s.fillDramaJobWaits(productionRow, waiting...); err != nil {
 		return nil, err
 	}
 	return views, nil
@@ -770,6 +777,15 @@ func (s *Service) fillDramaSegmentViews(projectID string, p *model.DramaProducti
 		request, _, _, prepareErr := s.prepareDramaSegment(settings, draft, rows[i], previous, castByID)
 		if prepareErr != nil {
 			request.Warning = prepareErr.Error()
+			// 视频模型下线、时长超限等会让预演在列参考图前返回。镜头里的设定引用仍在，照常列出并标为未发送；
+			// 否则制作台看起来像资产引用丢了，在参考面板勾选候选还会把本段存成只含该项的手动列表。
+			if len(request.References) < len(draft.view.Request.References) {
+				request.References = make([]DramaSegmentReference, 0, len(draft.view.Request.References))
+				for _, reference := range draft.view.Request.References {
+					reference.ResourceID, reference.Sent = castByID[reference.CastID].ImageResourceID, false
+					request.References = append(request.References, reference)
+				}
+			}
 		}
 		detail.Segments[i].Request = request
 	}
@@ -777,12 +793,28 @@ func (s *Service) fillDramaSegmentViews(projectID string, p *model.DramaProducti
 		cast, ok := castByID[id]
 		return cast, ok
 	}
+	// 排队作业的等待原因一次算好：本集作业、剧本作业与各段的提示词、视频作业。
+	waiting := []*DramaJobView{detail.ScriptJob}
+	for i := range detail.Jobs {
+		waiting = append(waiting, &detail.Jobs[i])
+	}
+	for i := range detail.Segments {
+		waiting = append(waiting, detail.Segments[i].PromptJob, detail.Segments[i].VideoJob)
+	}
+	if err := s.fillDramaJobWaits(p, waiting...); err != nil {
+		return err
+	}
 	for i := range detail.Segments {
 		view := &detail.Segments[i]
 		if view.VideoStatus != model.DramaMediaQueued || i >= len(rows) {
 			continue
 		}
-		if job := view.VideoJob; job != nil && (job.Status == model.DramaJobQueued || job.Status == model.DramaJobRunning) {
+		if job := view.VideoJob; job != nil && job.Status == model.DramaJobRunning {
+			continue
+		}
+		// 作业已排队、还没提交：原因是作品暂停、账号或本池同时生成数已满；下一轮就会提交时为空，显示“排队提交中”。
+		if job := view.VideoJob; job != nil && job.Status == model.DramaJobQueued {
+			view.VideoWait = job.Wait
 			continue
 		}
 		view.VideoWait = firstNonEmpty(dramaVideoWaitReason(settings, p, &detail.Episode, rows, i, detail.Shots, lookup), "排队中，等待调度提交")
@@ -830,7 +862,7 @@ func buildDramaSegmentDrafts(settings DramaSettings, meta dramaBibleMeta, shots 
 				}
 			}
 		}
-		input := production.SegmentPromptInput{Index: position, Count: len(groups), Title: view.Title, AspectRatio: settings.AspectRatio, Style: settings.StylePrompt, VisualRules: meta.VisualRules, Language: settings.Language, PauseMs: settings.Storyboard.DialoguePauseMs(), Independent: settings.parallelVideo(), Performance: settings.Storyboard.Performance, CameraMotion: settings.Storyboard.CameraMotion}
+		input := production.SegmentPromptInput{Index: position, Count: len(groups), Title: view.Title, AspectRatio: settings.AspectRatio, Style: settings.StylePrompt, VisualRules: meta.VisualRules, Language: settings.Language, PauseMs: settings.Storyboard.DialoguePauseMs(), CharsPerSecond: settings.Storyboard.CharsPerSecond(), Independent: settings.parallelVideo(), Performance: settings.Storyboard.Performance, CameraMotion: settings.Storyboard.CameraMotion}
 		for _, shot := range group {
 			view.ShotIDs = append(view.ShotIDs, shot.ID)
 			view.DurationMs += shot.DurationMs

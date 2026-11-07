@@ -28,31 +28,46 @@ func runTextTask(ctx context.Context, input canvasGenerationInput) (map[string]i
 	return runLegacyTextTask(ctx, input)
 }
 
-// Known text protocols keep the plugin's request mapping and host transport,
-// while sharing the SSE parser used by text generation and Agent requests.
+// Text plugins whose declared create path speaks a host-known wire keep the
+// plugin's request mapping and host transport, while sharing the thinking
+// parameters and SSE parser used by built-in text generation and Agent requests.
 func executeProtocolCreateRequest(ctx context.Context, input canvasGenerationInput, spec protocol.RequestSpec) ([]byte, *protocol.Result, error) {
-	wire := input.Config.InterfaceType
-	if wire == string(model.ChannelInterfaceOpenAIResponse) {
-		wire = "responses"
+	wire := ""
+	if input.Mode == "text" {
+		wire = declaredTextWire(ctx, input.Config.InterfaceType)
 	}
-	if input.Mode != "text" || !input.StreamText || (wire != "chat-completion" && wire != "responses" && wire != "claude-api") {
+	if wire == "" || (!input.StreamText && !input.TextOptions.Thinking) {
 		data, err := executeProtocolRequest(ctx, input.Config, spec)
 		return data, nil, err
 	}
 	body := protocolBodyObject(spec.Body)
 	if body == nil {
-		return nil, nil, errors.New("声明式流式文本请求体必须是 JSON 对象")
+		return nil, nil, errors.New("声明式文本请求体必须是 JSON 对象")
+	}
+	applyTextThinking(body, input, wire)
+	// Anthropic 线的思考开关必须显式下发：DeepSeek 等 V4 系网关对 /messages 默认开启
+	// 思考，省略 thinking 字段时预算被思考占满、正文可能为空（社区同类案例：
+	// NousResearch/hermes-agent#15700）。客户端未要求思考时显式关闭，与
+	// applyTextThinking 的 enabled 分支互补，不把默认值留给上游。
+	if wire == protocol.TextWireClaude && !input.TextOptions.Thinking {
+		body["thinking"] = map[string]interface{}{"type": "disabled"}
+	}
+	spec.Body = body
+	if !input.StreamText {
+		data, err := executeProtocolRequest(ctx, input.Config, spec)
+		return data, nil, err
 	}
 	body["stream"] = true
-	if wire == "chat-completion" {
+	if wire == protocol.TextWireChatCompletion {
 		if err := ensureChatCompletionStreamUsage(body); err != nil {
 			return nil, nil, err
 		}
 	}
-	spec.Body = body
-	parser := newStreamingAgentParser(wire, input.OnTextDelta)
-	parser.emitReasoning = input.OnReasoningDelta
-	data, mimeType, err := executeProtocolBinaryRequestWithConsumer(ctx, input.Config, spec, parser.consume)
+	data, mimeType, parser, err := executeTextWireStream(ctx, input.Config, spec, body, wire, func() *streamingAgentParser {
+		parser := newStreamingAgentParser(wire, input.OnTextDelta)
+		parser.emitReasoning = input.OnReasoningDelta
+		return parser
+	})
 	if err != nil || !strings.Contains(strings.ToLower(mimeType), "event-stream") {
 		return data, nil, err
 	}
@@ -199,6 +214,10 @@ func applyTextOutputLimit(body map[string]interface{}, limit int, field string) 
 }
 
 func claudeTextContent(input canvasGenerationInput) (interface{}, error) {
+	// Claude Messages 没有视频内容块；静默丢弃会让模型在没看到视频时照样作答。
+	if len(input.ReferenceVideos) > 0 {
+		return nil, errors.New("Claude 文本接口不支持参考视频，请换用支持视频识别的文本模型")
+	}
 	if len(input.ReferenceImages) == 0 {
 		return input.Prompt, nil
 	}

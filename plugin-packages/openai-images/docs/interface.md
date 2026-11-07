@@ -39,6 +39,7 @@
 | `create.path` | `"/v1/images/generations"` |
 | `create.contentType` | `"application/json"` |
 | `create.contentTypeTemplate` | `{"$if":{"condition":{"$gt":[{"$len":{"$ref":"request.images"}},0]},"then":"multipart/form-data","else":"application/json"}}` |
+| `create.files` | `[{"name":"image","source":{"$if":{"condition":{"$eq":[{"$len":{"$filter":{"from":{"$ref":"request.images"},"as":"media","where":{"$ne":[{"$ref":"media.role"},"mask"]}}}},1]},"then":{"$filter":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","where":{"$ne":[{"$ref":"media.role"},"mask"]}}},"else":null}},"filename":"image.png"},{"name":"image[]","source":{"$if":{"condition":{"$gt":[{"$len":{"$filter":{"from":{"$ref":"request.images"},"as":"media","where":{"$ne":[{"$ref":"media.role"},"mask"]}}}},1]},"then":{"$filter":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","where":{"$ne":[{"$ref":"media.role"},"mask"]}}},"else":null}}},{"name":"mask","source":{"$first":{"$filter":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","where":{"$eq":[{"$ref":"media.role"},"mask"]}}}},"filename":"mask.png"}]` |
 | `create.body.model` | `{"$ref":"request.model"}` |
 | `create.body.prompt` | `{"$ref":"request.prompt"}` |
 | `create.body.n` | `{"$omitEmpty":{"$if":{"condition":{"$gt":[{"$ref":"request.imageCount"},0]},"then":{"$ref":"request.imageCount"},"else":1}}}` |
@@ -51,12 +52,6 @@
 | `create.body.response_format` | `{"$omitEmpty":{"$ref":"request.providerOptions.openai-image.response_format"}}` |
 | `create.body.style` | `{"$omitEmpty":{"$ref":"request.providerOptions.openai-image.style"}}` |
 | `create.body.user` | `{"$omitEmpty":{"$ref":"request.providerOptions.openai-image.user"}}` |
-| `create.files[0].name` | `"image[]"` |
-| `create.files[0].source` | `{"$filter":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","where":{"$ne":[{"$ref":"media.role"},"mask"]}}}` |
-| `create.files[0].filename` | `"reference.png"` |
-| `create.files[1].name` | `"mask"` |
-| `create.files[1].source` | `{"$filter":{"from":{"$sortByOrder":{"$ref":"request.images"}},"as":"media","where":{"$eq":[{"$ref":"media.role"},"mask"]}}}` |
-| `create.files[1].filename` | `"mask.png"` |
 
 ## Provider 扩展键
 
@@ -86,7 +81,7 @@
 
 ## 兼容边界
 
-无参考图走 JSON generations；有参考图或蒙版走 multipart `/v1/images/edits`：每张参考图作为 `image[]` 文件部件、蒙版作为 `mask` 文件部件，其余参数作为表单字段，不再发送 JSON `images[].image_url`。OpenAI 官方与多数 OpenAI 兼容中转站接受 multipart 编辑；部分中转站对 JSON 编辑会直接断开连接。quality 的 1k/2k/4k 映射为 OpenAI low/medium/high。
+无参考图走 JSON generations；有参考图或蒙版走 multipart edits（官方与 LiteLLM 等网关的通用格式），单张参考图用 image 字段、多张用 image[]，蒙版用 mask。quality 的 1k/2k/4k 映射为 OpenAI low/medium/high。
 
 ## 动态图片参数
 
@@ -285,6 +280,147 @@
             }
           },
           "contentType": "application/json",
+          "contentTypeTemplate": {
+            "$if": {
+              "condition": {
+                "$gt": [
+                  {
+                    "$len": {
+                      "$ref": "request.images"
+                    }
+                  },
+                  0
+                ]
+              },
+              "then": "multipart/form-data",
+              "else": "application/json"
+            }
+          },
+          "files": [
+            {
+              "name": "image",
+              "source": {
+                "$if": {
+                  "condition": {
+                    "$eq": [
+                      {
+                        "$len": {
+                          "$filter": {
+                            "from": {
+                              "$ref": "request.images"
+                            },
+                            "as": "media",
+                            "where": {
+                              "$ne": [
+                                {
+                                  "$ref": "media.role"
+                                },
+                                "mask"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      1
+                    ]
+                  },
+                  "then": {
+                    "$filter": {
+                      "from": {
+                        "$sortByOrder": {
+                          "$ref": "request.images"
+                        }
+                      },
+                      "as": "media",
+                      "where": {
+                        "$ne": [
+                          {
+                            "$ref": "media.role"
+                          },
+                          "mask"
+                        ]
+                      }
+                    }
+                  },
+                  "else": null
+                }
+              },
+              "filename": "image.png"
+            },
+            {
+              "name": "image[]",
+              "source": {
+                "$if": {
+                  "condition": {
+                    "$gt": [
+                      {
+                        "$len": {
+                          "$filter": {
+                            "from": {
+                              "$ref": "request.images"
+                            },
+                            "as": "media",
+                            "where": {
+                              "$ne": [
+                                {
+                                  "$ref": "media.role"
+                                },
+                                "mask"
+                              ]
+                            }
+                          }
+                        }
+                      },
+                      1
+                    ]
+                  },
+                  "then": {
+                    "$filter": {
+                      "from": {
+                        "$sortByOrder": {
+                          "$ref": "request.images"
+                        }
+                      },
+                      "as": "media",
+                      "where": {
+                        "$ne": [
+                          {
+                            "$ref": "media.role"
+                          },
+                          "mask"
+                        ]
+                      }
+                    }
+                  },
+                  "else": null
+                }
+              }
+            },
+            {
+              "name": "mask",
+              "source": {
+                "$first": {
+                  "$filter": {
+                    "from": {
+                      "$sortByOrder": {
+                        "$ref": "request.images"
+                      }
+                    },
+                    "as": "media",
+                    "where": {
+                      "$eq": [
+                        {
+                          "$ref": "media.role"
+                        },
+                        "mask"
+                      ]
+                    }
+                  }
+                }
+              },
+              "filename": "mask.png"
+            }
+          ],
           "body": {
             "model": {
               "$ref": "request.model"
@@ -423,69 +559,7 @@
                 "$ref": "request.providerOptions.openai-image.user"
               }
             }
-          },
-          "contentTypeTemplate": {
-            "$if": {
-              "condition": {
-                "$gt": [
-                  {
-                    "$len": {
-                      "$ref": "request.images"
-                    }
-                  },
-                  0
-                ]
-              },
-              "then": "multipart/form-data",
-              "else": "application/json"
-            }
-          },
-          "files": [
-            {
-              "name": "image[]",
-              "source": {
-                "$filter": {
-                  "from": {
-                    "$sortByOrder": {
-                      "$ref": "request.images"
-                    }
-                  },
-                  "as": "media",
-                  "where": {
-                    "$ne": [
-                      {
-                        "$ref": "media.role"
-                      },
-                      "mask"
-                    ]
-                  }
-                }
-              },
-              "filename": "reference.png"
-            },
-            {
-              "name": "mask",
-              "source": {
-                "$filter": {
-                  "from": {
-                    "$sortByOrder": {
-                      "$ref": "request.images"
-                    }
-                  },
-                  "as": "media",
-                  "where": {
-                    "$eq": [
-                      {
-                        "$ref": "media.role"
-                      },
-                      "mask"
-                    ]
-                  }
-                }
-              },
-              "filename": "mask.png"
-            }
-          ]
+          }
         },
         "response": {
           "status": "succeeded",

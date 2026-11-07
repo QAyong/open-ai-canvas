@@ -72,6 +72,14 @@ func runAgentToolTask(ctx context.Context, input canvasGenerationInput) (map[str
 			result, err = postAgentRequest(ctx, input, path, withoutToolChoice, protocol)
 		}
 	}
+	if protocol == "claude-api" && isAgentToolChoiceCompatibilityError(err) {
+		if choice, _ := body["tool_choice"].(map[string]interface{}); stringField(choice, "type") != "auto" {
+			// Claude Opus 5.5、Sonnet 5.5 等模型不支持强制 tool_choice（any/tool），改用 auto 重发一次。
+			autoBody := cloneStringAnyMap(body)
+			autoBody["tool_choice"] = map[string]interface{}{"type": "auto"}
+			result, err = postAgentRequest(ctx, input, path, autoBody, protocol)
+		}
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -124,13 +132,12 @@ func applyAgentOutputLimit(body map[string]interface{}, limit int, protocol stri
 }
 
 func runDeclarativeAgentTask(ctx context.Context, input canvasGenerationInput, adapter protocol.AgentAdapter) (map[string]interface{}, error) {
-	wire := input.Config.InterfaceType
-	if wire == string(model.ChannelInterfaceOpenAIResponse) {
-		wire = "responses"
-	}
-	knownWire := wire == "chat-completion" || wire == "responses" || wire == "claude-api"
+	// 线格式取自插件声明的 agent 路径：Chat Completions / Responses / Messages 以外的
+	// 接口（如 Gemini generateContent）由插件自己映射，宿主不往里补思考参数。
+	wire := declaredAgentWire(ctx, input.Config.InterfaceType)
+	knownWire := wire != ""
 	if input.TextOptions.Thinking && !knownWire {
-		return nil, errors.New("当前声明式 Agent 渠道尚不支持思考模式，请关闭思考模式或切换内置协议渠道")
+		return nil, errors.New("当前 Agent 渠道的接口格式不支持思考模式，请关闭思考模式，或换用 Chat Completions、Responses、Messages 格式的渠道")
 	}
 	if input.AgentRequests == nil {
 		return nil, errors.New("画布 Agent 工具请求缺少协议参数")
@@ -156,14 +163,16 @@ func runDeclarativeAgentTask(ctx context.Context, input canvasGenerationInput, a
 		spec.Body = body
 		if input.StreamText {
 			body["stream"] = true
-			if wire == "chat-completion" {
+			if wire == protocol.TextWireChatCompletion {
 				if err := ensureChatCompletionStreamUsage(body); err != nil {
 					return nil, err
 				}
 			}
-			parser := newStreamingAgentParser(wire, input.OnTextDelta)
-			parser.emitReasoning = input.OnReasoningDelta
-			data, mime, err := executeProtocolBinaryRequestWithConsumer(ctx, input.Config, spec, parser.consume)
+			data, mime, parser, err := executeTextWireStream(ctx, input.Config, spec, body, wire, func() *streamingAgentParser {
+				parser := newStreamingAgentParser(wire, input.OnTextDelta)
+				parser.emitReasoning = input.OnReasoningDelta
+				return parser
+			})
 			if err != nil {
 				return nil, err
 			}
