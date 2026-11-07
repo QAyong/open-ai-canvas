@@ -108,39 +108,47 @@ func (p Policy) ApprovalRequired(permissionMode string) bool {
 
 // 工具名常量。业务包引用这些常量而不是字符串字面量。
 const (
-	AgentProfileRead       = "agent_profile_read"
-	PlanUpdate             = "plan_update"
-	AskUser                = "ask_user"
-	PrevisSceneRead        = "previs_scene_read"
-	PrevisPreview          = "previs_preview"
-	PrevisSceneCreate      = "previs_scene_create"
-	PrevisApplyPatch       = "previs_apply_patch"
-	CanvasListNodeTypes    = "canvas_list_node_types"
-	CanvasGetState         = "canvas_get_state"
-	CanvasReadText         = "canvas_read_text"
-	CanvasReadBatchTable   = "canvas_read_batch_table"
-	CanvasReadStoryboard   = "canvas_read_storyboard"
-	ImageTextDetect        = "image_text_detect"
-	ImageAnnotationRender  = "image_annotation_render"
-	SkillReadFile          = "skill_read_file"
-	SkillSearch            = "skill_search"
-	SkillMarketSearch      = "skill_market_search"
-	SkillRecommend         = "skill_recommend"
-	TaskGet                = "task_get"
-	CanvasInspectImage     = "canvas_inspect_image"
-	MemoryUpdate           = "memory_update"
-	ImageLayerSplit        = "image_layer_split"
-	ModelList              = "model_list"
-	CanvasCreateStoryboard = "canvas_create_storyboard"
-	CanvasEditStoryboard   = "canvas_edit_storyboard"
-	CanvasCreateCharacter  = "canvas_create_character"
-	CanvasEditBatchTable   = "canvas_edit_batch_table"
-	CanvasApplyOps         = "canvas_apply_ops"
-	CanvasArrangeNodes     = "canvas_arrange_nodes"
-	GenerateMedia          = "generate_media"
-	DramaGetContext        = "drama_get_context"
-	DramaAdoptCanvasMedia  = "drama_adopt_canvas_media"
-	ComplianceGetCheck     = "compliance_get_check"
+	AgentProfileRead        = "agent_profile_read"
+	PlanUpdate              = "plan_update"
+	AskUser                 = "ask_user"
+	PrevisSceneRead         = "previs_scene_read"
+	PrevisPreview           = "previs_preview"
+	PrevisSceneCreate       = "previs_scene_create"
+	PrevisApplyPatch        = "previs_apply_patch"
+	CanvasListNodeTypes     = "canvas_list_node_types"
+	CanvasGetState          = "canvas_get_state"
+	CanvasReadText          = "canvas_read_text"
+	CanvasReadBatchTable    = "canvas_read_batch_table"
+	CanvasReadStoryboard    = "canvas_read_storyboard"
+	ImageTextDetect         = "image_text_detect"
+	ImageAnnotationRender   = "image_annotation_render"
+	SkillReadFile           = "skill_read_file"
+	SkillSearch             = "skill_search"
+	SkillMarketSearch       = "skill_market_search"
+	SkillRecommend          = "skill_recommend"
+	TaskGet                 = "task_get"
+	CanvasInspectImage      = "canvas_inspect_image"
+	MemoryUpdate            = "memory_update"
+	ImageLayerSplit         = "image_layer_split"
+	ModelList               = "model_list"
+	CanvasCreateStoryboard  = "canvas_create_storyboard"
+	CanvasEditStoryboard    = "canvas_edit_storyboard"
+	CanvasCreateCharacter   = "canvas_create_character"
+	CanvasEditBatchTable    = "canvas_edit_batch_table"
+	CanvasApplyOps          = "canvas_apply_ops"
+	CanvasArrangeNodes      = "canvas_arrange_nodes"
+	GenerateMedia           = "generate_media"
+	GenerateMediaBatch      = "generate_media_batch"
+	MediaBatchControl       = "media_batch_control"
+	CanvasBuildBoard        = "canvas_build_board"
+	CanvasPreflight         = "canvas_preflight"
+	DramaGetContext         = "drama_get_context"
+	DramaAdoptCanvasMedia   = "drama_adopt_canvas_media"
+	ComplianceGetCheck      = "compliance_get_check"
+	ComplianceInspectImages = "compliance_inspect_images"
+	ComplianceDetectFaces   = "compliance_detect_faces"
+	ComplianceCompareFaces  = "compliance_compare_faces"
+	ComplianceSubmitReport  = "compliance_submit_report"
 )
 
 var offsets = []string{"offset", "connectionOffset", "storyboardOffset"}
@@ -192,9 +200,20 @@ func policies() []Policy {
 		{Name: CanvasApplyOps, Kind: KindWrite, RequiresCanvas: true},
 		{Name: CanvasArrangeNodes, Kind: KindWrite, RequiresCanvas: true},
 		{Name: GenerateMedia, Kind: KindMedia, RequiresCanvas: true},
+		// 批量生成一次审批覆盖多条收费任务；批准后的放行、重试与取消由 media_batch_control
+		// 在已批准的明细和额度内执行，本身不再产生新的收费授权，因此归为会话控制类。
+		{Name: GenerateMediaBatch, Kind: KindMedia, RequiresCanvas: true},
+		{Name: MediaBatchControl, Kind: KindControl, RequiresCanvas: true, RequiresWriteMode: true},
+		{Name: CanvasBuildBoard, Kind: KindWrite, RequiresCanvas: true},
+		{Name: CanvasPreflight, Kind: KindRead, RequiresCanvas: true, RequiresWriteMode: true, OutsideTransaction: true},
 		{Name: DramaGetContext, Kind: KindRead, RequiresCanvas: true, RequiresDrama: true, OutsideTransaction: true},
 		{Name: DramaAdoptCanvasMedia, Kind: KindWrite, RequiresCanvas: true, RequiresDrama: true, AlwaysApprove: true},
 		{Name: ComplianceGetCheck, Kind: KindRead, RequiresCompliance: true, OutsideTransaction: true},
+		// 合规比对工具记录证据而不是读取事实，所以是 Prepare/Control：不计入只读循环预算、不走缓存，也不需要审批。
+		{Name: ComplianceInspectImages, Kind: KindPrepare, Vision: true, RequiresCompliance: true},
+		{Name: ComplianceDetectFaces, Kind: KindPrepare, RequiresCompliance: true, OutsideTransaction: true},
+		{Name: ComplianceCompareFaces, Kind: KindPrepare, RequiresCompliance: true, OutsideTransaction: true},
+		{Name: ComplianceSubmitReport, Kind: KindControl, RequiresCompliance: true, OutsideTransaction: true},
 	}
 }
 

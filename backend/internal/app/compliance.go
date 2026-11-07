@@ -1,37 +1,45 @@
-// 合规核验：创建核验、后台运行比对、读取结果。Agent 的 compliance_get_check 与页面共用这里的读取，
-// 归属校验也只在这里做。比对判定见 internal/compliance，引擎目前是 mock 适配层。
+// 合规核验：创建核验并由服务端发起 Agent 运行、读取结果。核验由 Agent 按合规技能调用比对工具完成
+// （见 compliance_agent.go）；归属校验只在这里做，页面与 Agent 的 compliance_get_check 共用同一个读取。
+// 判定规则与报告校验见 internal/compliance，引擎目前是 mock 适配层。
 package app
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
+	"unicode"
 
 	"yingce/backend/internal/compliance"
 	"yingce/backend/internal/kernel"
 	"yingce/backend/internal/model"
-	"yingce/backend/internal/repository"
 
 	"gorm.io/gorm"
 )
 
 const (
-	complianceRunTimeout = 2 * time.Minute
-	// 超过这个时间仍在运行的核验多半是服务重启时丢了后台任务，读取时收尾为失败。
-	complianceStaleAfter  = 5 * time.Minute
+	// 超过这个时间没有任何进展的核验多半是服务重启时丢了 Agent 运行，读取时收尾为失败。
+	complianceStaleAfter  = 10 * time.Minute
 	compliancePromptLimit = 2000
 	complianceNameLimit   = 128
 	complianceFileLimit   = 256
-	// mock 引擎每个阶段的模拟耗时，页面据此逐步展示进度。
-	complianceMockStepDelay = 900 * time.Millisecond
+
+	// 一次核验的 Agent 运行上限。人脸比对约 6-8 步：看图、检测、比对、提交、收尾。
+	complianceRunMaxCredits = 50
+	complianceRunMaxSteps   = 16
 )
 
 type ComplianceImageInput struct {
 	ResourceID string `json:"resourceId"`
 	Name       string `json:"name"`
+}
+
+// ComplianceAgentModel 是承载核验的 Agent 使用的渠道文本模型，需要支持图片输入。
+type ComplianceAgentModel struct {
+	ChannelID       string `json:"channelId"`
+	ChannelModelKey string `json:"channelModelKey"`
 }
 
 type CreateComplianceCheckRequest struct {
@@ -40,6 +48,7 @@ type CreateComplianceCheckRequest struct {
 	SubjectName string                 `json:"subjectName"`
 	Target      ComplianceImageInput   `json:"target"`
 	Bases       []ComplianceImageInput `json:"bases"`
+	AgentModel  ComplianceAgentModel   `json:"agentModel"`
 }
 
 type ComplianceThresholds struct {
@@ -53,24 +62,29 @@ type ComplianceCheckView struct {
 	Prompt      string `json:"prompt"`
 	SubjectName string `json:"subjectName"`
 	Status      string `json:"status"`
-	StepsDone   int    `json:"stepsDone"`
-	StepCount   int    `json:"stepCount"`
+	// Steps 由比对工具实际产出的证据推导，反映 Agent 做到了哪一步。
+	Steps []compliance.Step `json:"steps"`
+	// RunID 是承载这次核验的 Agent 运行；SkillVersion 是当时使用的合规技能版本。
+	RunID        string `json:"runId"`
+	SkillVersion string `json:"skillVersion"`
 	// Thresholds 是判定一致/疑似的相似度阈值，结果页的规则说明据此生成，前端不写死。
-	Thresholds ComplianceThresholds          `json:"thresholds"`
-	Target     ComplianceImageInput          `json:"target"`
-	Bases      []ComplianceImageInput        `json:"bases"`
-	Result     *compliance.FaceCompareResult `json:"result,omitempty"`
-	Error      string                        `json:"error,omitempty"`
-	CreatedAt  time.Time                     `json:"createdAt"`
-	UpdatedAt  time.Time                     `json:"updatedAt"`
+	Thresholds ComplianceThresholds   `json:"thresholds"`
+	Target     ComplianceImageInput   `json:"target"`
+	Bases      []ComplianceImageInput `json:"bases"`
+	Result     *compliance.Report     `json:"result,omitempty"`
+	Error      string                 `json:"error,omitempty"`
+	CreatedAt  time.Time              `json:"createdAt"`
+	UpdatedAt  time.Time              `json:"updatedAt"`
 }
 
-func (s *Service) faceComparer() compliance.FaceComparer {
-	if s.complianceComparer != nil {
-		return s.complianceComparer
+func (s *Service) faceEngine() compliance.FaceEngine {
+	if s.complianceEngine != nil {
+		return s.complianceEngine
 	}
-	return compliance.MockFaceComparer{StepDelay: complianceMockStepDelay}
+	return compliance.MockFaceEngine{}
 }
+
+func complianceRunKey(checkID string) string { return "compliance-" + checkID }
 
 func (s *Service) CreateComplianceCheck(actor *model.User, req CreateComplianceCheckRequest) (*ComplianceCheckView, error) {
 	if actor == nil {
@@ -83,17 +97,27 @@ func (s *Service) CreateComplianceCheck(actor *model.User, req CreateComplianceC
 	if len([]rune(prompt)) > compliancePromptLimit {
 		return nil, kernel.BadAuthRequest("核验说明过长")
 	}
+	for _, r := range prompt {
+		if unicode.IsControl(r) && r != '\n' && r != '\r' && r != '\t' {
+			return nil, kernel.BadAuthRequest("核验说明不能包含控制字符")
+		}
+	}
 	if len([]rune(subject)) > complianceNameLimit {
 		return nil, kernel.BadAuthRequest("授权人姓名过长")
 	}
 	if len(req.Bases) == 0 || len(req.Bases) > compliance.MaxBaseImages {
 		return nil, kernel.BadAuthRequest("授权底图需要 1 到 3 张")
 	}
+	agentRequest := CloudAgentRequest{
+		Model: strings.TrimSpace(req.AgentModel.ChannelModelKey), ChannelID: strings.TrimSpace(req.AgentModel.ChannelID), ChannelModelKey: strings.TrimSpace(req.AgentModel.ChannelModelKey),
+		PermissionMode: "read_only", ReasoningMode: "off",
+	}
 
 	now := time.Now().UTC()
+	checkID := "chk_" + kernel.NewID()
 	check := &model.ComplianceCheck{
-		ID: "chk_" + kernel.NewID(), UserID: actor.ID, Kind: req.Kind, Prompt: prompt, SubjectName: subject,
-		Status: compliance.StatusRunning, CreatedAt: now, UpdatedAt: now,
+		ID: checkID, UserID: actor.ID, Kind: req.Kind, Prompt: prompt, SubjectName: subject,
+		Status: compliance.StatusRunning, RunID: cloudAgentID(actor.ID, complianceRunKey(checkID)), CreatedAt: now, UpdatedAt: now,
 	}
 	var images []model.ComplianceCheckImage
 	seen := map[string]bool{}
@@ -132,40 +156,55 @@ func (s *Service) CreateComplianceCheck(actor *model.User, req CreateComplianceC
 			return nil, err
 		}
 	}
+	// 核验靠 Agent 看图，模型不支持图片输入时在落库前就拒绝，不留下一个注定失败的记录。
+	if agentRequest.ChannelID == "" || agentRequest.ChannelModelKey == "" || !s.cloudAgentVisionEnabled(agentRequest) {
+		return nil, kernel.BadAuthRequest("请选择支持图片输入的文本模型来执行核验")
+	}
 	if err := s.repo.CreateComplianceCheck(check, images); err != nil {
 		return nil, err
 	}
 
-	target := compliance.ImageRef{ResourceID: images[0].ResourceID, Name: images[0].Name}
-	bases := make([]compliance.ImageRef, 0, len(images)-1)
-	for _, image := range images[1:] {
-		bases = append(bases, compliance.ImageRef{ResourceID: image.ResourceID, Name: image.Name})
+	agentRequest.Prompt = complianceRunPrompt(prompt, subject, images)
+	agentRequest.ComplianceCheckID = check.ID
+	agentRequest.IdempotencyKey = complianceRunKey(check.ID)
+	agentRequest.Budget.MaxCredits = complianceRunMaxCredits
+	agentRequest.Budget.MaxSteps = complianceRunMaxSteps
+	run, err := s.CreateCloudAgentRun(actor.ID, agentRequest, "")
+	if err != nil {
+		slog.Warn("发起合规核验的 Agent 运行失败", "checkId", check.ID, "error", err)
+		if _, finishErr := s.repo.FinishComplianceCheck(check.ID, compliance.StatusFailed, 0, "", "无法启动核验，请稍后重试"); finishErr != nil {
+			slog.Warn("合规核验收尾失败", "checkId", check.ID, "error", finishErr)
+		}
+		return nil, err
 	}
-	go s.runComplianceCheck(check.ID, target, bases)
+	if version := s.complianceSkillVersion(actor.ID, run.ID); version != "" {
+		if err := s.repo.SetComplianceCheckRun(check.ID, run.ID, version); err != nil {
+			slog.Warn("记录合规技能版本失败", "checkId", check.ID, "error", err)
+		}
+	}
 	return s.ComplianceCheck(actor.ID, check.ID)
 }
 
-// runComplianceCheck 在后台调用比对引擎并写回进度与结果。失败原因只写日志，页面只看到通用提示。
-func (s *Service) runComplianceCheck(checkID string, target compliance.ImageRef, bases []compliance.ImageRef) {
-	ctx, cancel := context.WithTimeout(context.Background(), complianceRunTimeout)
-	defer cancel()
-	result, err := s.faceComparer().Compare(ctx, target, bases, func(stepsDone int) {
-		if err := s.repo.UpdateComplianceCheckProgress(checkID, stepsDone); err != nil {
-			slog.Warn("更新合规核验进度失败", "checkId", checkID, "error", err)
-		}
-	})
-	if err == nil {
-		var encoded []byte
-		if encoded, err = json.Marshal(result); err == nil {
-			err = s.repo.FinishComplianceCheck(checkID, compliance.StatusDone, compliance.StepCount, string(encoded), "")
+// complianceRunPrompt 是交给 Agent 的任务描述：用户的说明加素材清单。流程与规则在合规技能里，不在这里。
+func complianceRunPrompt(prompt, subject string, images []model.ComplianceCheckImage) string {
+	var target string
+	bases := 0
+	for _, image := range images {
+		if image.Role == model.ComplianceImageTarget {
+			target = image.Name
+		} else {
+			bases++
 		}
 	}
-	if err != nil {
-		slog.Warn("合规核验失败", "checkId", checkID, "error", err)
-		if finishErr := s.repo.FinishComplianceCheck(checkID, compliance.StatusFailed, 0, "", "核验失败，请稍后重试"); finishErr != nil {
-			slog.Warn("合规核验收尾失败", "checkId", checkID, "error", finishErr)
-		}
+	detail := []string{fmt.Sprintf("待核验素材：%s", firstNonEmpty(target, "未命名")), fmt.Sprintf("授权底图 %d 张", bases)}
+	if subject != "" {
+		detail = append(detail, "授权人："+subject)
 	}
+	request := "请按合规技能完成这次人脸比对核验，并用 compliance_submit_report 提交结论。"
+	if prompt != "" {
+		request = prompt + "\n\n" + request
+	}
+	return request + "（" + strings.Join(detail, "；") + "）"
 }
 
 // ComplianceCheck 返回属于该用户的核验；不是自己的核验一律按不存在处理。
@@ -177,17 +216,21 @@ func (s *Service) ComplianceCheck(userID, id string) (*ComplianceCheckView, erro
 		}
 		return nil, err
 	}
-	if check.Status == compliance.StatusRunning && time.Since(check.UpdatedAt) > complianceStaleAfter {
-		if err := s.repo.FinishComplianceCheck(check.ID, compliance.StatusFailed, check.StepsDone, "", "核验超时或服务已重启，请重新发起"); err != nil {
-			return nil, err
-		}
-		if check, images, err = s.repo.ComplianceCheckForUser(userID, id); err != nil {
-			return nil, err
+	if check.Status == compliance.StatusRunning {
+		if reason := s.complianceAbandonedReason(userID, check); reason != "" {
+			if _, err := s.repo.FinishComplianceCheck(check.ID, compliance.StatusFailed, check.StepsDone, "", reason); err != nil {
+				return nil, err
+			}
+			// 重新读取：收尾是有条件的，可能刚好被提交报告抢先写成了完成。
+			if check, images, err = s.repo.ComplianceCheckForUser(userID, id); err != nil {
+				return nil, err
+			}
 		}
 	}
 	view := &ComplianceCheckView{
 		ID: check.ID, Kind: check.Kind, Prompt: check.Prompt, SubjectName: check.SubjectName, Status: check.Status,
-		StepsDone: check.StepsDone, StepCount: compliance.StepCount, Thresholds: ComplianceThresholds{Match: compliance.MatchThreshold, Suspect: compliance.SuspectThreshold}, Bases: []ComplianceImageInput{}, Error: check.Error,
+		RunID: check.RunID, SkillVersion: check.SkillVersion,
+		Thresholds: ComplianceThresholds{Match: compliance.MatchThreshold, Suspect: compliance.SuspectThreshold}, Bases: []ComplianceImageInput{}, Error: check.Error,
 		CreatedAt: check.CreatedAt, UpdatedAt: check.UpdatedAt,
 	}
 	for _, image := range images {
@@ -198,8 +241,13 @@ func (s *Service) ComplianceCheck(userID, id string) (*ComplianceCheckView, erro
 			view.Bases = append(view.Bases, input)
 		}
 	}
+	evidence, err := s.complianceEvidence(userID, check.ID, len(view.Bases))
+	if err != nil {
+		return nil, err
+	}
+	view.Steps = compliance.Steps(evidence, check.Status)
 	if check.ResultJSON != "" {
-		var result compliance.FaceCompareResult
+		var result compliance.Report
 		if err := json.Unmarshal([]byte(check.ResultJSON), &result); err != nil {
 			return nil, err
 		}
@@ -208,42 +256,49 @@ func (s *Service) ComplianceCheck(userID, id string) (*ComplianceCheckView, erro
 	return view, nil
 }
 
-// complianceAgentWait 是 Agent 读取时最多等待运行中的核验完成的时间：页面提交后 Agent 会立刻启动，
-// 常常早于比对结束；有界等待让它一次读到结果，而不是读到"进行中"后反复轮询。
-var complianceAgentWait = 8 * time.Second
-
-const complianceAgentPoll = 250 * time.Millisecond
-
-const complianceAgentNote = "结论只来自比对引擎的相似度与固定阈值，不得改判或编造相似度；图片内容不提供，不要描述图片；状态以本次读取为准"
-
-// cloudAgentHandleComplianceGetCheck 是 Agent 读取本轮绑定核验的只读工具。
-// 它只能读本轮绑定的那一次核验，归属校验沿用页面读取的同一个服务方法。
-func cloudAgentHandleComplianceGetCheck(_ *repository.Repository, userID string, state *cloudAgentRuntime, call cloudAgentCall, services ...*Service) (any, error) {
-	if len(services) == 0 || services[0] == nil {
-		return nil, BadAuthRequest("合规服务不可用")
+// complianceAbandonedReason 判断运行中的核验是否已经没人在做了：长时间没有进展，或承载它的 Agent 运行已结束
+// 却没有提交结论（比如 Agent 提前停下，或服务重启丢了运行）。返回空串表示仍在正常进行。
+func (s *Service) complianceAbandonedReason(userID string, check *model.ComplianceCheck) string {
+	if time.Since(check.UpdatedAt) > complianceStaleAfter {
+		return "核验超时或服务已重启，请重新发起"
 	}
-	var args struct{}
-	if err := decodeCloudAgentJSONObject(call.Function.Arguments, &args); err != nil {
-		return nil, cloudAgentJSONArgumentError(err)
+	if check.RunID == "" {
+		return ""
 	}
-	if state.Request.ComplianceCheckID == "" {
-		return nil, BadAuthRequest("本轮没有绑定合规核验")
-	}
-	readAt := time.Now()
-	view, err := services[0].ComplianceCheck(userID, state.Request.ComplianceCheckID)
-	for deadline := readAt.Add(complianceAgentWait); err == nil && view.Status == compliance.StatusRunning && time.Now().Before(deadline); {
-		time.Sleep(complianceAgentPoll)
-		view, err = services[0].ComplianceCheck(userID, state.Request.ComplianceCheckID)
-	}
+	status, err := s.repo.CloudAgentRunStatus(userID, check.RunID)
 	if err != nil {
-		return nil, err
+		return ""
 	}
-	return map[string]any{
-		"source": "compliance_db", "readAt": readAt.Format(time.RFC3339), "note": complianceAgentNote,
-		"check": view,
-		"verdicts": map[string]string{
-			"match": "相似度达到一致阈值", "suspect": "介于疑似与一致阈值之间，建议人工确认", "mismatch": "低于疑似阈值",
-			"pass": "全部人脸都与授权人一致", "review": "存在疑似，或有人脸未能匹配授权人", "risk": "没有任何人脸与授权人一致", "no_face": "没有检出人脸",
-		},
-	}, nil
+	if cloudAgentRunTerminal(status) {
+		return "Agent 已结束但没有给出核验结论，请重新发起"
+	}
+	return ""
+}
+
+// complianceEvidence 把证据表还原成 compliance.Evidence。
+func (s *Service) complianceEvidence(userID, checkID string, baseCount int) (compliance.Evidence, error) {
+	rows, err := s.repo.ComplianceEvidenceForCheck(userID, checkID)
+	if err != nil {
+		return compliance.Evidence{}, err
+	}
+	evidence := compliance.Evidence{BaseCount: baseCount, Detect: map[string][]compliance.DetectedFace{}}
+	for _, row := range rows {
+		switch {
+		case row.EvidenceKey == compliance.InspectKey:
+			evidence.Inspected = true
+		case strings.HasPrefix(row.EvidenceKey, "detect:"):
+			var faces []compliance.DetectedFace
+			if err := json.Unmarshal([]byte(row.ResultJSON), &faces); err != nil {
+				return compliance.Evidence{}, err
+			}
+			evidence.Detect[strings.TrimPrefix(row.EvidenceKey, "detect:")] = faces
+		case strings.HasPrefix(row.EvidenceKey, "compare:"):
+			var fact compliance.CompareFact
+			if err := json.Unmarshal([]byte(row.ResultJSON), &fact); err != nil {
+				return compliance.Evidence{}, err
+			}
+			evidence.Compares = append(evidence.Compares, fact)
+		}
+	}
+	return evidence, nil
 }

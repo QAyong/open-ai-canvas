@@ -409,7 +409,8 @@ func (s *Service) cloudAgentReadSkillFile(userID string, state *cloudAgentRuntim
 	if err != nil {
 		return nil, err
 	}
-	if !detail.IsAdded || detail.Status != 1 {
+	system := state != nil && complianceSkillIsSystem(state.Request, id)
+	if (!detail.IsAdded && !system) || detail.Status != 1 {
 		return nil, BadAuthRequest("技能已被卸载或停用，本轮不能再读取")
 	}
 	if detail.VersionID != version {
@@ -449,7 +450,7 @@ func (s *Service) cloudAgentReadSkillFile(userID string, state *cloudAgentRuntim
 		if err != nil {
 			return nil, err
 		}
-		if !latest.IsAdded || latest.Status != 1 || latest.VersionID != version {
+		if (!latest.IsAdded && !system) || latest.Status != 1 || latest.VersionID != version {
 			return nil, creationConflict("技能在读取过程中更新或被卸载，本轮不再读取它")
 		}
 		content = file.Content

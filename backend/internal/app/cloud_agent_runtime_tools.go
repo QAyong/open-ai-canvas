@@ -453,6 +453,9 @@ func (s *Service) advanceCloudAgentTool(run *model.CloudAgentExecution, state *c
 	toolPolicy := agenttool.Of(call.Function.Name)
 	// 媒体工具在所有模式下都进入审批；其他写入只在 request_approval 下审批。
 	if allowed && toolPolicy.ApprovalRequired(state.Request.PermissionMode) && state.Approval == nil {
+		if call.Function.Name == agenttool.GenerateMediaBatch {
+			return s.requestCloudAgentMediaBatchApproval(run, state, call)
+		}
 		var plan *cloudAgentMediaPlan
 		var modelName string
 		var mediaRequest CreateTaskRequest
@@ -571,8 +574,14 @@ func (s *Service) advanceCloudAgentTool(run *model.CloudAgentExecution, state *c
 			})
 		}
 	}
+	if allowed && call.Function.Name == agenttool.GenerateMediaBatch && state.Approval != nil && state.Approval.Decision == "approve" {
+		return s.startCloudAgentMediaBatch(run, state, call)
+	}
 	if allowed && (cloudAgentMediaTool(call.Function.Name)) && state.Approval != nil && state.Approval.Decision == "approve" {
 		return s.advanceCloudAgentMedia(run, state, cloudAgentMediaCall(call))
+	}
+	if allowed && call.Function.Name == agenttool.MediaBatchControl {
+		return s.advanceCloudAgentMediaBatchControl(run, state, call)
 	}
 	policy, err := s.RuntimePolicy()
 	if err != nil {
@@ -582,10 +591,14 @@ func (s *Service) advanceCloudAgentTool(run *model.CloudAgentExecution, state *c
 	var inspectionResult any
 	var inspectionErr error
 	if allowed && binding.Handler.Pipeline == cloudAgentToolVision {
-		inspectionResult, inspectionErr = s.prepareCloudAgentImageInspection(run.UserID, state.Request.CanvasID, state, call)
+		if call.Function.Name == agenttool.ComplianceInspectImages {
+			inspectionResult, inspectionErr = s.prepareComplianceImageInspection(run.UserID, state, call)
+		} else {
+			inspectionResult, inspectionErr = s.prepareCloudAgentImageInspection(run.UserID, state.Request.CanvasID, state, call)
+		}
 		if errors.Is(inspectionErr, errCloudAgentImageInspectionBudget) {
 			inspectionErr = &cloudAgentReadLoopError{
-				ToolName:   agenttool.CanvasInspectImage,
+				ToolName:   call.Function.Name,
 				Count:      state.cloudAgentImageInspectionCalls() + 1,
 				Budget:     true,
 				ReasonCode: "vision_read_budget_exceeded",

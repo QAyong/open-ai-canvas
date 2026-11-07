@@ -68,6 +68,9 @@ type CloudAgentRequest struct {
 const cloudAgentMaxStepsLimit = 9999
 const cloudAgentMaxConfirmationRounds = 2
 
+// cloudAgentAskUserMaxFields 让长流程开工前的问卷一次问完，不必拆成多轮确认。
+const cloudAgentAskUserMaxFields = 16
+
 func cloudAgentStepLimit(req CloudAgentRequest) int {
 	if req.Budget.MaxSteps > 0 {
 		return min(req.Budget.MaxSteps, cloudAgentMaxStepsLimit)
@@ -526,7 +529,7 @@ func (s *Service) CreateCloudAgentRun(userID string, req CloudAgentRequest, pare
 	}
 	// 技能范围（已安装且允许自动使用 + 本轮固定）与记忆快照都在建 run 时冻结：目录进 system，
 	// 固定技能提示和记忆作为有来源的数据消息在每次模型请求前重新插入。
-	skillPool, err := s.cloudAgentBuildSkillPool(userID, req.Prompt, req.PinnedSkillIDs, s.cloudAgentContextBudgetForRequest(req))
+	skillPool, err := s.cloudAgentBuildSkillPool(userID, req.Prompt, req.PinnedSkillIDs, s.cloudAgentContextBudgetForRequest(req), complianceSystemSkills(req)...)
 	if err != nil {
 		return nil, err
 	}

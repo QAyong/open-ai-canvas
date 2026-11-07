@@ -14,10 +14,12 @@ import (
 	"yingce/backend/internal/auth"
 	"yingce/backend/internal/canvas"
 	"yingce/backend/internal/compliance"
+	"yingce/backend/internal/inspirations"
 	"yingce/backend/internal/kernel"
 	"yingce/backend/internal/model"
 	"yingce/backend/internal/payment"
 	"yingce/backend/internal/platform"
+	"yingce/backend/internal/poselibrary"
 	"yingce/backend/internal/prompts"
 	"yingce/backend/internal/providercatalog"
 	"yingce/backend/internal/repository"
@@ -29,7 +31,7 @@ import (
 
 type Service struct {
 	repo                     *repository.Repository
-	complianceComparer       compliance.FaceComparer
+	complianceEngine         compliance.FaceEngine
 	dataDir                  string
 	cancelMu                 sync.Mutex
 	registrationMu           sync.Mutex
@@ -87,6 +89,8 @@ type Service struct {
 	canvas                   *canvas.Service
 	canvasRealtime           *canvas.RealtimeHub
 	workbench                *workbench.Service
+	poseLibrary              *poselibrary.Service
+	inspirationFeed          *inspirations.Service
 	piRunnerMu               sync.Mutex
 	piRunnerWg               sync.WaitGroup
 	piRunners                map[string]context.CancelFunc
@@ -103,11 +107,12 @@ type Service struct {
 	approvedMediaWg          sync.WaitGroup
 	approvedMediaWaiters     map[string]context.CancelFunc
 	approvedMediaClosed      bool
+	approvalFollowUpMu       sync.Mutex
+	approvalFollowUpWg       sync.WaitGroup
+	approvalFollowUps        map[string]struct{} // 正在执行批准后收尾的审批（runID:approvalID），见 cloud_agent_approval_followup.go
+	approvalFollowUpClosed   bool
 	providerCatalogOnce      sync.Once
 	providerCatalog          *providercatalog.Source
-	creditPolicyMu           sync.RWMutex
-	creditPolicyCache        *CreditPolicy
-	creditPolicyAt           time.Time
 	userGroups               userGroupState
 	modelAvailabilityMu      sync.RWMutex
 	modelAvailabilityCache   map[publicModelAvailabilityKey]*PublicModelAvailability
@@ -117,6 +122,9 @@ type Service struct {
 	// dramaTaskHook 只在测试中替换短剧调度的任务提交，生产路径始终走 CreateTask 准入。
 	dramaTailFrameHook func(userID, resourceID string) (string, error)
 	dramaTaskHook      func(userID string, req CreateTaskRequest, timeline *renderProject) (*model.Task, error)
+	// dramaTails 跟踪调度循环之外的尾帧抽取；dramaBackgroundRunner 为空时用后台 worker，测试替换为同步执行。
+	dramaTails            dramaTailWorker
+	dramaBackgroundRunner func(fn func()) bool
 }
 
 const taskWorkerConcurrency = 3
@@ -178,6 +186,8 @@ func newService(repo *repository.Repository, dataDir string) *Service {
 	service.canvas = canvas.New(service.repo, canvasHost{svc: service})
 	service.canvasRealtime = canvasRealtime
 	service.workbench = workbench.New(service.repo, workbenchAdminGate{svc: service}, workbenchAdminGate{svc: service})
+	service.poseLibrary = poselibrary.New(service.repo, service.dataDir, poseLibraryAdminGate{svc: service})
+	service.inspirationFeed = inspirations.New(service.repo, inspirationFeedAdminGate{svc: service}, service.inspirationFeedLock, service.runWorkerLoop)
 	service.platform = platform.New(service.repo, coordinator, platformHost{svc: service})
 	return service
 }
@@ -200,9 +210,12 @@ func (s *Service) StartWorker() {
 	s.startResourceDeletionWorker(ctx)
 	s.startResourceOffloadWorker()
 	s.startSkillSyncWorker(ctx)
+	s.startEcommerceSkillSyncWorker(ctx)
 	s.startPaymentWorker(ctx)
 	s.startBillingAutoRefundWorker()
+	s.startArkPortraitWorker()
 	s.startDramaScheduler()
+	s.startInspirationFeedWorker()
 	go s.syncAgentSessionLimit()
 	s.runWorkerLoop(func(ctx context.Context) {
 		ticker := time.NewTicker(3 * time.Second)

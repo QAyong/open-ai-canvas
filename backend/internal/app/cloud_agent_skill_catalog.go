@@ -300,7 +300,9 @@ func buildCloudAgentSkillHints(prompt string, pinned []skills.AgentSkillCatalogE
 
 // cloudAgentBuildSkillPool 冻结本轮可用的技能范围，并生成目录与动态提示。
 // 范围 = 允许自动使用的已安装技能 ∪ 本轮固定的技能；固定的技能必须已安装且启用。
-func (s *Service) cloudAgentBuildSkillPool(userID, prompt string, pinnedIDs []string, budget cloudAgentContextBudget) (cloudAgentSkillPool, error) {
+//
+// systemSkillIDs 是服务端按场景注入的技能（如合规核验），不要求用户已安装，按固定技能处理。
+func (s *Service) cloudAgentBuildSkillPool(userID, prompt string, pinnedIDs []string, budget cloudAgentContextBudget, systemSkillIDs ...string) (cloudAgentSkillPool, error) {
 	if len(pinnedIDs) > cloudAgentSkillPinnedMax {
 		return cloudAgentSkillPool{}, BadAuthRequest(fmt.Sprintf("每轮最多固定 %d 个技能", cloudAgentSkillPinnedMax))
 	}
@@ -311,6 +313,21 @@ func (s *Service) cloudAgentBuildSkillPool(userID, prompt string, pinnedIDs []st
 	byID := make(map[string]skills.AgentSkillCatalogEntry, len(entries))
 	for _, entry := range entries {
 		byID[entry.SkillID] = entry
+	}
+	if len(systemSkillIDs) > 0 {
+		systemEntries, err := s.skillDomain().AgentSkillCatalogByIDs(userID, systemSkillIDs)
+		if err != nil {
+			return cloudAgentSkillPool{}, err
+		}
+		if len(systemEntries) != len(systemSkillIDs) {
+			return cloudAgentSkillPool{}, BadAuthRequest("本场景需要的系统技能不可用，请联系管理员")
+		}
+		pinnedIDs = append(append([]string(nil), pinnedIDs...), systemSkillIDs...)
+		for _, entry := range systemEntries {
+			// 系统技能只在固定时可用，不进自动发现目录。
+			entry.AgentMode = model.UserSkillAgentModeManual
+			byID[entry.SkillID] = entry
+		}
 	}
 	pinnedSet := make(map[string]bool, len(pinnedIDs))
 	pinnedEntries := make([]skills.AgentSkillCatalogEntry, 0, len(pinnedIDs))
