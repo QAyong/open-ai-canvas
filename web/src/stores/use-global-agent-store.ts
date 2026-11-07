@@ -44,6 +44,8 @@ export type AgentCanvasContext = {
  */
 export type AgentPageContext = {
     kind: "compliance";
+    /** 合规工作区的右栏挂载点，复用平台唯一 Agent，不新建第二份对话。 */
+    panelHost?: HTMLDivElement | null;
     /** 空态（还没有核验）为 null。 */
     checkId: string | null;
     prefillRequest?: AgentPrefillRequest | null;

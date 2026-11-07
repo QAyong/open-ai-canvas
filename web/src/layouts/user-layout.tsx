@@ -25,7 +25,7 @@ export default function UserLayout({ children }: { children: ReactNode }) {
     // Agent 停靠在右侧时，工作区让出同样的宽度，画布（或合规结果页）、顶栏和角落控件都不被遮挡。
     // 能否停靠取决于页面是否发布了 Agent 上下文，和面板共用 useAgentPanelDock，两边宽度不会错开。
     const agentDock = useAgentPanelDock();
-    const agentDocked = Boolean(userId) && agentDock.active;
+    const agentDocked = Boolean(userId) && agentDock.active && !agentDock.embedded;
 
     useLayoutEffect(() => {
         // Ant Design 浮层挂载在 body，必须用路由级标记隔离用户工作台与画布编辑器、运营后台。

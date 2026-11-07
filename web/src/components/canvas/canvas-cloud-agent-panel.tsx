@@ -1,6 +1,7 @@
 import { createClientUUID } from "@/lib/client-id";
 import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type DragEvent as ReactDragEvent } from "react";
 import { App, Button } from "antd";
+import { createPortal } from "react-dom";
 import { appQueryClient } from "@/lib/query-client";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { EyeOff, FileText, ImagePlus, MoveDiagonal2, SquareDashedMousePointer, X } from "lucide-react";
@@ -177,6 +178,7 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
     const prefillRequest = useGlobalAgentStore((state) => state.canvas?.prefillRequest ?? state.page?.prefillRequest ?? null);
     const onFocusNode = useGlobalAgentStore((state) => state.canvas?.onFocusNode);
     const launcherHidden = useGlobalAgentStore((state) => state.page?.launcherHidden ?? false);
+    const panelHost = useGlobalAgentStore((state) => state.page?.panelHost ?? null);
     const complianceCheckId = useGlobalAgentStore((state) => state.page?.checkId ?? "");
     const open = useGlobalAgentStore((state) => state.open);
     const onOpen = useGlobalAgentStore((state) => state.openAgent);
@@ -2387,7 +2389,7 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
             />
         ) : null;
 
-    return (
+    const panelContent = (
         <>
             <AgentLauncher theme={theme} statusColor={statusColor} approvalPending={Boolean(approval)} reducedMotion={Boolean(reducedMotion)} status={status} hidden={open || launcherHidden} onOpen={onOpen} />
             <AnimatePresence>
@@ -2397,16 +2399,22 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
                         animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
                         exit={reducedMotion ? { opacity: 0 } : dock.active ? { opacity: 0, x: 24 } : { opacity: 0, y: 12, scale: 0.985 }}
                         transition={{ duration: reducedMotion ? 0 : 0.26, ease: [0.16, 1, 0.3, 1] }}
-                        className={`canvas-agent-panel fixed z-[calc(var(--z-toast)+1)] flex min-w-0 flex-col overflow-hidden${dock.active ? " is-docked" : ""}`}
+                        className={`canvas-agent-panel ${panelHost ? "relative" : "fixed z-[calc(var(--z-toast)+1)]"} flex min-w-0 flex-col overflow-hidden${dock.active || panelHost ? " is-docked" : ""}`}
                         style={
-                            { ...panelLayout.style, "--agent-surface-base": theme.node.panel, "--agent-ink": theme.node.text, "--agent-accent": theme.accent.primary, "--agent-shadow-color": theme.spatial.shadow } as CSSProperties &
-                                Record<`--${string}`, string>
+                            {
+                                ...panelLayout.style,
+                                ...(panelHost ? { inset: "auto", width: "100%", height: "100%" } : {}),
+                                "--agent-surface-base": theme.node.panel,
+                                "--agent-ink": theme.node.text,
+                                "--agent-accent": theme.accent.primary,
+                                "--agent-shadow-color": theme.spatial.shadow,
+                            } as CSSProperties & Record<`--${string}`, string>
                         }
                         aria-label="Agent 工作台"
                         data-popover-anchor-container
                         data-canvas-no-zoom
                         data-canvas-wheel-scroll
-                        {...panelLayout.pointerHandlers}
+                        {...(panelHost && !dock.active ? {} : panelLayout.pointerHandlers)}
                         {...panelDropHandlers}
                         onWheel={(event) => event.stopPropagation()}
                     >
@@ -2431,7 +2439,7 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
                                 className="agent-panel-dock-resizer"
                                 onKeyDown={panelLayout.onResizeKeyDown}
                             />
-                        ) : (
+                        ) : panelHost ? null : (
                             <>
                                 <div data-agent-resize="north" className="absolute inset-x-5 top-0 z-10 hidden h-2 cursor-n-resize touch-none sm:block" />
                                 <div data-agent-resize="west" className="absolute bottom-5 left-0 top-5 z-10 hidden w-2 cursor-w-resize touch-none sm:block" />
@@ -2544,7 +2552,7 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
                                         onSettings={() => setView("settings")}
                                         onResetLayout={panelLayout.reset}
                                         docked={dock.active}
-                                        onToggleDock={dock.available ? () => setDocked(!dock.active) : undefined}
+                                        onToggleDock={dock.available && !panelHost ? () => setDocked(!dock.active) : undefined}
                                         onCollapse={onCollapse}
                                     />
                                     {cloudHistoryError || (canvasId && !cloudHistoryReady) ? (
@@ -2749,4 +2757,5 @@ export const CanvasCloudAgentPanel = memo(function CanvasCloudAgentPanel() {
             <SkillRecommendationsModal open={skillRecommendationsOpen} onClose={() => setSkillRecommendationsOpen(false)} />
         </>
     );
+    return panelHost ? createPortal(panelContent, panelHost) : panelContent;
 });

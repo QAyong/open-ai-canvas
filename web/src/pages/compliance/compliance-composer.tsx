@@ -9,9 +9,9 @@ import "@/components/canvas/canvas-short-drama-entry.css";
 import "./compliance-entry.css";
 import { complianceSkills, resolveComposerSubmit, type ComplianceSkillId } from "./compliance-check";
 
-const MAX_BASE_IMAGES = 3;
+const MAX_BASE_IMAGES = 1;
 
-const ENTRY_SUGGESTIONS = ["核验这张剧照里的人是否为已授权演员", "检查海报人像与授权底图是否一致", "对比两张图是不是同一个人"];
+const ENTRY_SUGGESTIONS = ["对比两张图片的肖像相似度", "检查两张人像是否存在明显撞脸风险", "分析真人照片与风格化角色的可识别性"];
 
 const entryStyle = {
     "--canvas-entry-text": "var(--foreground)",
@@ -118,7 +118,7 @@ export function ComplianceComposer({
         const accepted = imagesOf(files).slice(0, MAX_BASE_IMAGES - bases.length);
         if (accepted.length) setBases([...bases, ...accepted.map(track)]);
     };
-    // 「导入素材」先补待核验素材，再补授权底图；顺序和输入框里两个槽位一致。
+    // 「导入素材」先补图片 A，再补图片 B；顺序和输入框里两个槽位一致。
     const importFiles = (files: File[]) => {
         const images = imagesOf(files);
         if (!images.length) return;
@@ -165,7 +165,7 @@ export function ComplianceComposer({
                 <h2 className="canvas-entry-title">
                     让创作，<strong>合规无忧。</strong>
                 </h2>
-                <p className="canvas-entry-subtitle">说明要核验什么，Agent 帮你调用合规能力，给出结论和处置建议。</p>
+                <p className="canvas-entry-subtitle">选择两张图片进行肖像对比；网络批量对比即将上线。</p>
                 <form
                     className="canvas-entry-composer"
                     onSubmit={(event) => {
@@ -176,8 +176,8 @@ export function ComplianceComposer({
                     <textarea
                         value={prompt}
                         rows={2}
-                        placeholder="描述你要核验的内容…"
-                        aria-label="描述你要核验的内容"
+                        placeholder="补充对比目的或使用场景…"
+                        aria-label="补充对比目的或使用场景"
                         onChange={(event) => setPrompt(event.target.value)}
                         onKeyDown={(event) => {
                             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -188,11 +188,11 @@ export function ComplianceComposer({
                     />
                     {skillId === "face-compare" ? (
                         <div className="compliance-entry-slots">
-                            <ImageSlot label="待核验素材" images={target ? [target] : []} multiple={false} onPick={pickTarget} onRemove={removeTarget} />
-                            <ImageSlot label="授权底图" hint={`最多 ${MAX_BASE_IMAGES} 张`} images={bases} multiple onPick={pickBases} onRemove={removeBase} />
+                            <ImageSlot label="图片 A（待检测）" images={target ? [target] : []} multiple={false} onPick={pickTarget} onRemove={removeTarget} />
+                            <ImageSlot label="图片 B（对比图）" images={bases} multiple={false} onPick={pickBases} onRemove={removeBase} />
                             <label className="compliance-entry-subject">
-                                授权人
-                                <input value={subjectName} onChange={(event) => setSubjectName(event.target.value)} placeholder="选填，用于报告署名" />
+                                结果名称
+                                <input value={subjectName} onChange={(event) => setSubjectName(event.target.value)} placeholder="选填，例如角色 A 对比" />
                             </label>
                         </div>
                     ) : null}
@@ -202,7 +202,7 @@ export function ComplianceComposer({
                             导入素材
                         </button>
                         <span className="canvas-entry-hint">{missing.length ? `还需要：${missing.join("、")}` : "Enter 发送 · Shift+Enter 换行"}</span>
-                        <button type="submit" className="canvas-entry-send" disabled={!canSubmit || locked} aria-label={mode === "chat" ? "发送给 Agent" : "开始核验"}>
+                        <button type="submit" className="canvas-entry-send" disabled={!canSubmit || locked} aria-label={mode === "chat" ? "发送给 Agent" : "开始对比"}>
                             <ArrowUp aria-hidden="true" />
                         </button>
                     </div>
@@ -218,7 +218,7 @@ export function ComplianceComposer({
                         }}
                     />
                 </form>
-                <div className="canvas-entry-suggestions" role="list" aria-label="核验示例">
+                <div className="canvas-entry-suggestions" role="list" aria-label="对比示例">
                     {ENTRY_SUGGESTIONS.map((item) => (
                         <button
                             key={item}
@@ -233,7 +233,7 @@ export function ComplianceComposer({
                         </button>
                     ))}
                 </div>
-                <div className="canvas-entry-paths compliance-entry-paths" role="group" aria-label="合规能力">
+                <div className="canvas-entry-paths compliance-entry-paths" role="group" aria-label="对比方式">
                     {complianceSkills.map((skill) => {
                         const Icon = skill.icon;
                         return (

@@ -11,6 +11,7 @@ import { WorkspaceStorageLimitNotice } from "@/components/layout/workspace-stora
 import { WorkspaceWalletHost } from "@/components/layout/workspace-wallet-modal";
 import { cn } from "@/lib/utils";
 import { isSpatialWorkbenchPath } from "@/lib/workspace-routes";
+import { useGlobalAgentStore } from "@/stores/use-global-agent-store";
 
 const WorkspaceCommandPalette = lazy(() => import("@/components/layout/workspace-command-palette").then((module) => ({ default: module.WorkspaceCommandPalette })));
 
@@ -22,7 +23,9 @@ export function AppWorkspaceShell({ children }: { children: ReactNode }) {
     const [paletteOpen, setPaletteOpen] = useState(false);
 
     const hideChrome = pathname.startsWith("/admin") || /^\/canvas\/[^/]+/.test(pathname);
-    const showGlobalTopBar = !hideChrome;
+    const hasComplianceReport = useGlobalAgentStore((state) => Boolean(state.page?.panelHost));
+    const complianceReportWorkspace = pathname.startsWith("/compliance/") && hasComplianceReport;
+    const showGlobalTopBar = !hideChrome && !complianceReportWorkspace;
     const spatialWorkbench = isSpatialWorkbenchPath(pathname);
     const creationWorkspace = pathname === "/" || pathname === "/create";
 
@@ -87,20 +90,8 @@ export function AppWorkspaceShell({ children }: { children: ReactNode }) {
 
                     <div className="app-workspace-main-row flex min-h-0 min-w-0 flex-1 overflow-hidden">
                         {!hideChrome ? (
-                            <aside
-                                className={cn(
-                                    "app-workspace-sidebar flex h-full shrink-0 flex-col overflow-hidden",
-                                    mobileSidebarExpanded && "is-mobile-expanded",
-                                    desktopSidebarCollapsed && "is-collapsed",
-                                )}
-                            >
-                                <WorkspaceSidebarNav
-                                    collapsed={desktopSidebarCollapsed}
-                                    onNavigate={handleNavClick}
-                                    onOpenSearch={() => setPaletteOpen(true)}
-                                    onExpand={expandDesktopSidebar}
-                                    onCollapse={collapseDesktopSidebar}
-                                />
+                            <aside className={cn("app-workspace-sidebar flex h-full shrink-0 flex-col overflow-hidden", mobileSidebarExpanded && "is-mobile-expanded", desktopSidebarCollapsed && "is-collapsed")}>
+                                <WorkspaceSidebarNav collapsed={desktopSidebarCollapsed} onNavigate={handleNavClick} onOpenSearch={() => setPaletteOpen(true)} onExpand={expandDesktopSidebar} onCollapse={collapseDesktopSidebar} />
                             </aside>
                         ) : null}
 
@@ -110,7 +101,11 @@ export function AppWorkspaceShell({ children }: { children: ReactNode }) {
                         </div>
                     </div>
 
-                    {paletteOpen ? <Suspense fallback={null}><WorkspaceCommandPalette open onClose={() => setPaletteOpen(false)} /></Suspense> : null}
+                    {paletteOpen ? (
+                        <Suspense fallback={null}>
+                            <WorkspaceCommandPalette open onClose={() => setPaletteOpen(false)} />
+                        </Suspense>
+                    ) : null}
                 </div>
             </WorkspaceTopBarExtensionProvider>
             <WorkspaceWalletHost />

@@ -1,0 +1,48 @@
+/* 页面自己分栏：平台 Agent 通过 portal 挂在右栏，不挤压工作台导航。 */
+.compliance-workbench {
+    display: flex;
+    height: 100%;
+    min-height: 0;
+    min-width: 0;
+    flex-direction: column;
+    background: var(--background);
+}
+
+.compliance-workbench-columns {
+    display: grid;
+    min-height: 0;
+    min-width: 0;
+    flex: 1;
+    grid-template-columns: minmax(0, 1fr);
+    overflow: hidden;
+}
+
+.compliance-report-column,
+.compliance-agent-column {
+    min-height: 0;
+    min-width: 0;
+    overflow: hidden;
+}
+
+.compliance-agent-column {
+    display: none;
+}
+
+.compliance-workbench[data-agent-open="true"] .compliance-workbench-columns {
+    grid-template-columns: minmax(0, 1fr) var(--compliance-agent-width);
+}
+
+.compliance-workbench[data-agent-open="true"] .compliance-agent-column {
+    display: block;
+}
+
+/* 与 Agent 的停靠断点一致，窄屏在同一工作区切换内容，不使用遮挡报告的浮窗。 */
+@media (max-width: 959px) {
+    .compliance-workbench[data-agent-open="true"] .compliance-workbench-columns {
+        grid-template-columns: minmax(0, 1fr);
+    }
+
+    .compliance-workbench[data-agent-open="true"] .compliance-report-column {
+        display: none;
+    }
+}
