@@ -12,6 +12,8 @@
 
 ## 个人方案审阅（`docs/specs/`）
 
+- [Spec-003：肖像双图对比](specs/feature-003-portrait-pair-compare.md)：两张图片直接对比的用户流程、Skill/Agent/真实人脸引擎职责、风险等级、数据边界、实施顺序与上线验收（提案，待实施）。
+- [Spec-002：合规平台完整 Pi Agent 能力](specs/feature-002-compliance-pi-agent.md)：统一会话、交互与运行控制，内置合规技能、领域工具及隔离工作区能力（提案，未实施）。
 - [Spec-001：影策跨平台本地启动与更新器](specs/feature-001-local-launcher.md)：独立代码、影策图标、默认浏览器启动、可信镜像下载、版本更新与数据恢复（源码安装开发版实施中，端到端未验收）。
 
 ## 设计沉淀
