@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter, Route, Routes } from "react-router";
 
 import { navigationTools } from "../src/constant/navigation-tools";
+import { workspacePageTitleKey } from "../src/lib/workspace-page-title";
 import CompliancePage from "../src/pages/compliance";
 import { ComplianceFaceResult } from "../src/pages/compliance/compliance-face-result";
 import { pickComplianceAgentModel, resolveComposerSubmit } from "../src/pages/compliance/compliance-check";
@@ -99,16 +100,18 @@ const visionConfig = {
 describe("合规平台入口", () => {
     test("紧跟自由画布并使用独立路由", () => {
         const sidebar = source("../src/components/layout/workspace-sidebar-nav.tsx");
-        expect(sidebar).toMatch(/toolItem\("canvas", "\/canvas"\)[^\n]*\n\s+toolItem\("compliance", "\/compliance"\)/);
+        expect(sidebar).toMatch(/toolItem\("canvas", "\/canvas", t\)[^\n]*\n\s+toolItem\("compliance", "\/compliance", t\)/);
         expect(navigationTools.find((item) => item.slug === "compliance")?.label).toBe("合规平台");
-        expect(source("../src/components/layout/workspace-top-bar.tsx")).toContain('compliance: "合规平台"');
+        expect(workspacePageTitleKey("/compliance")).toBe("合规平台");
+        expect(workspacePageTitleKey("/compliance/chk_1")).toBe("合规平台");
+        expect(source("../src/components/layout/workspace-top-bar.tsx")).toContain("workspacePageTitleKey");
     });
 
     test("新页面保留认证边界和懒加载", () => {
         const router = source("../src/router.tsx");
-        expect(router).toContain("const CompliancePage = lazy(loadCompliancePage)");
+        expect(router).toContain("const CompliancePage = workspaceRoutePages.compliance;");
         expect(router).toContain('{ path: "/compliance", element: <RequireAuth>{deferred(<CompliancePage />)}</RequireAuth> }');
-        expect(source("../src/lib/workspace-route-modules.ts")).toContain('compliance: () => import("@/pages/compliance")');
+        expect(source("../src/lib/workspace-route-modules.ts")).toContain('compliance: preloadableLazy(() => import("@/pages/compliance"))');
         expect(router).toContain('{ path: "/compliance/:id", element: <RequireAuth>{deferred(<CompliancePage />)}</RequireAuth> }');
     });
 
